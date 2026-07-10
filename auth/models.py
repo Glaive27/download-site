@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, LargeBinary, String
 
 from auth.database import Base
 
@@ -42,15 +42,17 @@ class Series(Base):  # noqa: D101
 
 
 class FileRecord(Base):  # noqa: D101
-    """文件元数据记录表，实际文件内容保存在 Cloudflare R2（S3 API）.
+    """文件记录表，文件二进制内容直接存储在 PostgreSQL 数据库中.
 
     字段说明：
     - series: 所属系列名
     - filename: 下载时显示的文件名（如 series_v1.pdf）
     - version: 版本号（如 v1、v2）
     - size: 文件大小（字节）
-    - mime_type: 文件 MIME 类型
-    - object_key: R2 中的对象键（如 series/series_v1.pdf）
+    - mime_type: 文件 MIME 类型（用于 /files 列表展示）
+    - object_key: 历史遗留字段（R2 时代使用），现填充占位符 "legacy"
+    - file_data: 文件二进制内容（直接存入数据库）
+    - file_mime: 下载时使用的 MIME 类型（与 mime_type 冗余但独立，便于精确控制下载响应头）
     - created_at: 上传时间
     """
 
@@ -62,7 +64,9 @@ class FileRecord(Base):  # noqa: D101
     version = Column(String(32), nullable=False)
     size = Column(Integer, nullable=False)
     mime_type = Column(String(128), nullable=False)
-    object_key = Column(String(512), nullable=False, unique=True, index=True)
+    object_key = Column(String(512), nullable=False, index=True)
+    file_data = Column(LargeBinary, nullable=True)
+    file_mime = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     def __repr__(self) -> str:  # noqa: D105

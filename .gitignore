@@ -58,3 +58,6 @@ db/*
 *.db
 *.sqlite
 *.sqlite3
+
+# WorkBuddy workspace data
+.workbuddy/

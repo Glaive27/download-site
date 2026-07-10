@@ -1,6 +1,6 @@
 """文件下载中心 - FastAPI 后端入口.
 
-文件持久化存储：Cloudflare R2（S3 API）
+文件持久化存储：PostgreSQL 数据库（文件二进制直接存入 file_records.file_data）
 数据库：Render PostgreSQL（DATABASE_URL），本地开发回退到 SQLite
 """
 
@@ -14,7 +14,7 @@ from typing import Annotated, List
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,7 @@ from auth.database import Base, SessionLocal, engine, get_db
 from auth.models import FileRecord, Series, User
 from auth.router import router as auth_router
 from auth.security import require_admin
-from storage import delete_object, get_object_url, r2_enabled, upload_object
+from storage import delete_object, r2_enabled
 
 
 @asynccontextmanager
@@ -106,7 +106,7 @@ def _format_size(size_bytes: int) -> str:
 
 
 def _build_object_key(series: str, filename: str) -> str:
-    """构建 R2 对象键，按系列分目录存储."""
+    """构建对象键（历史遗留，现仅用于占位）."""
     return f"{series}/{filename}"
 
 
@@ -193,11 +193,11 @@ async def upload_file(
     db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
 ) -> JSONResponse:
-    """向指定系列上传文件，自动命名并上传到 R2，同时写入数据库."""
+    """向指定系列上传文件，自动命名并将文件二进制存入数据库."""
     if not r2_enabled():
         raise HTTPException(
             status_code=503,
-            detail="R2 对象存储未配置，无法上传文件",
+            detail="存储服务不可用",
         )
 
     if not _is_safe_series_name(series):
@@ -227,15 +227,7 @@ async def upload_file(
         next_version += 1
         filename = f"{series}_v{next_version}{safe_ext}"
 
-    object_key = _build_object_key(series, filename)
-
-    try:
-        upload_object(object_key, content, content_type=mime_type)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"上传到 R2 失败: {exc}",
-        ) from exc
+    object_key = "legacy"
 
     record = FileRecord(
         series=series,
@@ -244,6 +236,8 @@ async def upload_file(
         size=size,
         mime_type=mime_type,
         object_key=object_key,
+        file_data=content,
+        file_mime=mime_type,
     )
     db.add(record)
     db.commit()
@@ -258,7 +252,7 @@ async def delete_series(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
-    """删除整个系列及其在 R2 上的所有文件."""
+    """删除整个系列及其所有文件记录."""
     if not _is_safe_series_name(series):
         raise HTTPException(status_code=400, detail="非法系列名")
 
@@ -276,7 +270,7 @@ async def delete_series(
             except Exception as exc:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"删除 R2 对象失败: {exc}",
+                    detail=f"删除对象失败: {exc}",
                 ) from exc
         db.delete(record)
         deleted += 1
@@ -298,7 +292,7 @@ async def delete_file(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
-    """删除系列内指定文件（数据库记录 + R2 对象）."""
+    """删除系列内指定文件（数据库记录 + 二进制数据）."""
     if not _is_safe_series_name(series):
         raise HTTPException(status_code=400, detail="非法系列名")
     if not _is_safe_filename(filename):
@@ -318,7 +312,7 @@ async def delete_file(
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"删除 R2 对象失败: {exc}",
+                detail=f"删除对象失败: {exc}",
             ) from exc
 
     db.delete(record)
@@ -331,7 +325,7 @@ async def download_file(
     filename: str,
     db: Annotated[Session, Depends(get_db)],
 ):
-    """下载指定文件：重定向到 R2 预签名链接或公开 URL."""
+    """下载指定文件：从数据库读取二进制内容并直接返回文件流."""
     if not _is_safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
 
@@ -339,21 +333,14 @@ async def download_file(
     if not record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    if not r2_enabled():
-        raise HTTPException(
-            status_code=503,
-            detail="R2 对象存储未配置，无法下载文件",
-        )
+    if not record.file_data:
+        raise HTTPException(status_code=404, detail="文件内容不存在")
 
-    try:
-        url = get_object_url(record.object_key)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"获取 R2 下载链接失败: {exc}",
-        ) from exc
-
-    return RedirectResponse(url=url)
+    return Response(
+        content=record.file_data,
+        media_type=record.file_mime,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/admin/reset-password")
