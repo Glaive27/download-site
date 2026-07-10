@@ -248,7 +248,7 @@ async def upload_file(
         next_version += 1
         filename = f"{series}_v{next_version}{safe_ext}"
 
-    object_key = "legacy"
+    object_key = _build_object_key(series, filename)
 
     record = FileRecord(
         series=series,
