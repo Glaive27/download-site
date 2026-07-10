@@ -12,8 +12,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, List
 
+import logging
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -28,6 +29,9 @@ from auth.security import require_admin
 from storage import delete_object, r2_enabled
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期事件：启动时初始化数据库与管理员账号."""
@@ -40,6 +44,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="文件下载中心", lifespan=lifespan)
 app.include_router(auth_router)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """全局兜底异常处理器：返回 JSON 错误详情，便于线上排查."""
+    import traceback
+
+    logger.error("Unhandled exception at %s %s: %s\n%s",
+                 request.method, request.url.path, exc, traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"{type(exc).__name__}: {exc}",
+            "path": request.url.path,
+        },
+    )
+
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
