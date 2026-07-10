@@ -23,20 +23,15 @@ services:
       # Cloudflare R2（S3 API）配置
       # 请在 Render 控制台 Environment 页面填入真实值，或使用 R2 提供的 API 令牌
       - key: R2_ACCOUNT_ID
-        value: ""
         sync: false
       - key: R2_ACCESS_KEY_ID
-        value: ""
         sync: false
       - key: R2_SECRET_ACCESS_KEY
-        value: ""
         sync: false
       - key: R2_BUCKET
-        value: ""
         sync: false
       # R2 公开访问域名（可选）：桶公开访问并绑定自定义域名时填写
       - key: R2_PUBLIC_URL
-        value: ""
         sync: false
       # 紧急重置密码端点令牌（可选）
       - key: ADMIN_INIT_TOKEN
