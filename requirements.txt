@@ -6,7 +6,8 @@ psycopg2-binary>=2.9.9
 passlib[bcrypt]>=1.7.4
 python-jose[cryptography]>=3.3.0
 pydantic>=2.0.0
-bcrypt>=4.0.0,<5.0
+# bcrypt 4.2.0+ 移除了 __about__，与旧版 passlib 不兼容，固定到 4.1.x
+bcrypt>=4.0.0,<4.2.0
 python-dotenv>=1.0.0
 boto3>=1.34.0
 

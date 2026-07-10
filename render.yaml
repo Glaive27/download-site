@@ -14,10 +14,8 @@ services:
         value: Glaive
       - key: ADMIN_PASSWORD
         value: "19866179818"
-      # 临时设为 1，触发启动时把管理员密码重置为 ADMIN_PASSWORD 当前值
-      # 登录成功后再改回 0
       - key: RESET_ADMIN_PASSWORD
-        value: "1"
+        value: "0"
       - key: DATABASE_URL
         fromDatabase:
           name: download-site-db
