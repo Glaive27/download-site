@@ -364,7 +364,101 @@ async def download_file(filename: str) -> FileResponse:
     )
 
 
+@app.post("/api/admin/reset-password")
+async def reset_admin_password(
+    token: str,
+    new_password: str,
+) -> JSONResponse:
+    """紧急重置管理员密码（无需登录）。
+
+    需要同时满足以下条件：
+    1. 环境变量 ``ADMIN_INIT_TOKEN`` 已设置且与请求中的 ``token`` 匹配
+    2. ``new_password`` 长度 ≥ 6
+    3. 请求来自非 GET 方法（仅 POST 暴露，避免日志泄露）
+
+    适用场景：在 Render 上忘记管理员密码但无法 SSH / Shell 进入容器时，
+    通过 Render Dashboard 的 Shell 或一次性 curl 调用重置。
+
+    使用示例（部署完成后调用一次）::
+
+        curl -X POST "$RENDER_URL/api/admin/reset-password?token=$TOKEN&new_password=$NEW_PW"
+    """
+    expected = os.environ.get("ADMIN_INIT_TOKEN", "")
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="ADMIN_INIT_TOKEN 未配置，无法重置密码",
+        )
+    if token != expected:
+        raise HTTPException(status_code=403, detail="token 不正确")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="密码长度至少 6 位")
+
+    from auth.database import SessionLocal  # noqa: WPS433
+    from auth.models import User  # noqa: WPS433
+    from auth.security import get_password_hash  # noqa: WPS433
+
+    admin_username = os.environ.get("ADMIN_USERNAME", "Glaive").strip() or "Glaive"
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.username == admin_username).first()
+        if admin is None:
+            admin = User(
+                username=admin_username,
+                hashed_password=get_password_hash(new_password),
+                role="admin",
+            )
+            db.add(admin)
+        else:
+            admin.hashed_password = get_password_hash(new_password)
+        db.commit()
+    finally:
+        db.close()
+
+    return JSONResponse({
+        "message": f"管理员 {admin_username} 密码已重置",
+        "username": admin_username,
+    })
+
+
+@app.get("/api/admin/diag")
+async def admin_diag() -> JSONResponse:
+    """诊断端点：返回管理员账号状态、数据库路径、JWT 配置（不泄露密钥）。
+
+    用于部署后排查登录问题，无需鉴权（仅返回只读信息）。
+    """
+    from auth.database import DB_PATH, SessionLocal  # noqa: WPS433
+    from auth.models import User  # noqa: WPS433
+
+    admin_username = os.environ.get("ADMIN_USERNAME", "Glaive").strip() or "Glaive"
+    secret_configured = bool(os.environ.get("SECRET_KEY"))
+
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.username == admin_username).first()
+        admin_info = None
+        if admin is not None:
+            admin_info = {
+                "username": admin.username,
+                "role": admin.role,
+                "id": admin.id,
+            }
+    finally:
+        db.close()
+
+    return JSONResponse({
+        "db_path": str(DB_PATH),
+        "db_exists": DB_PATH.exists(),
+        "data_dir": str(FILES_DIR),
+        "admin_username": admin_username,
+        "admin_exists": admin_info is not None,
+        "admin_info": admin_info,
+        "secret_key_configured": secret_configured,
+        "reset_endpoint_available": bool(os.environ.get("ADMIN_INIT_TOKEN")),
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=1234)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "1234")))

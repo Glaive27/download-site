@@ -44,8 +44,26 @@ python main.py
 | --- | --- |
 | `SECRET_KEY` | JWT 签名密钥（Render 可自动生成） |
 | `ADMIN_USERNAME` | 管理员账号 |
-| `ADMIN_PASSWORD` | 管理员密码 |
+| `ADMIN_PASSWORD` | 管理员密码（**未设置时默认 `19866179818`，生产请修改**） |
 | `DATA_DIR` | 数据存储目录，建议设为 `/tmp/data`（Render 免费版磁盘为临时存储） |
+| `RESET_ADMIN_PASSWORD` | `1` 时启动时强制重置管理员密码为 `ADMIN_PASSWORD` 当前值 |
+| `ADMIN_INIT_TOKEN` | 启用 `POST /api/admin/reset-password` 紧急重置端点（密码丢失时用） |
+
+### 排查：管理员登录失败
+
+部署后访问 `https://<你的-render-域名>/api/admin/diag`，返回 JSON 显示：
+- `db_exists`: SQLite 文件是否创建
+- `admin_exists`: 管理员账号是否存在
+- `secret_key_configured`: `SECRET_KEY` 是否已设置
+- `reset_endpoint_available`: 密码重置端点是否可用
+
+如果忘记管理员密码（且已设置 `ADMIN_INIT_TOKEN`）：
+
+```bash
+curl -X POST "https://<你的-render-域名>/api/admin/reset-password?token=$ADMIN_INIT_TOKEN&new_password=$NEW_PW"
+```
+
+或者更简单：在 Render 控制台 Environment 把 `RESET_ADMIN_PASSWORD` 改为 `1`（同时设置新的 `ADMIN_PASSWORD`），保存后 Render 自动重新部署，密码就被重置。改完后再把 `RESET_ADMIN_PASSWORD` 改回 `0`。
 
 ## ⚠️ Render 免费版注意事项
 
