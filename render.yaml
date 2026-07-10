@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: download-site
+    runtime: python
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATA_DIR
+        value: /tmp/data
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: Glaive
+      - key: ADMIN_PASSWORD
+        value: CHANGE_ME_NOW

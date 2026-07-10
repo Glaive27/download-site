@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件下载中心</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header glass-card">
+            <div class="header-top">
+                <div class="header-brand">
+                    <h1>文件下载中心</h1>
+                    <p class="subtitle">支持任意文件类型的上传与下载</p>
+                </div>
+                <div class="header-auth" id="header-auth">
+                    <button class="btn btn-primary" id="auth-btn">登录 / 注册</button>
+                </div>
+            </div>
+        </header>
+
+        <section class="admin-panel glass-card hidden" id="admin-panel">
+            <h2 class="panel-title">管理面板</h2>
+            <div class="admin-grid">
+                <form class="admin-form" id="create-series-form">
+                    <label>创建新系列</label>
+                    <div class="form-row">
+                        <input type="text" id="new-series-name" placeholder="系列名称" required>
+                        <button type="submit" class="btn btn-primary">创建</button>
+                    </div>
+                </form>
+                <form class="admin-form" id="upload-file-form">
+                    <label>上传文件</label>
+                    <div class="form-row">
+                        <select id="upload-series-select" required>
+                            <option value="">选择系列</option>
+                        </select>
+                        <input type="file" id="upload-file-input" required>
+                        <button type="submit" class="btn btn-primary">上传</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <main class="file-list" id="file-list">
+            <div class="loading">加载中…</div>
+        </main>
+
+        <footer class="footer glass-card">
+            <p>服务运行于 <span class="port">1234</span> 端口</p>
+        </footer>
+    </div>
+
+    <div class="modal-overlay" id="auth-modal">
+        <div class="modal glass-card">
+            <button class="modal-close" id="modal-close" aria-label="关闭">&times;</button>
+            <div class="modal-tabs">
+                <button class="modal-tab active" data-tab="login">登录</button>
+                <button class="modal-tab" data-tab="register">注册</button>
+            </div>
+            <form class="auth-form" id="login-form">
+                <label for="login-username">用户名</label>
+                <input type="text" id="login-username" name="username" required minlength="3" maxlength="32" placeholder="请输入用户名">
+                <label for="login-password">密码</label>
+                <input type="password" id="login-password" name="password" required minlength="6" maxlength="128" placeholder="请输入密码">
+                <button type="submit" class="btn btn-primary">登录</button>
+            </form>
+            <form class="auth-form hidden" id="register-form">
+                <label for="register-username">用户名</label>
+                <input type="text" id="register-username" name="username" required minlength="3" maxlength="32" placeholder="3-32 位字母/数字/下划线/中文">
+                <label for="register-password">密码</label>
+                <input type="password" id="register-password" name="password" required minlength="6" maxlength="128" placeholder="至少 6 位">
+                <button type="submit" class="btn btn-primary">注册</button>
+            </form>
+            <p class="auth-message" id="auth-message"></p>
+        </div>
+    </div>
+
+    <script src="/static/glass.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
