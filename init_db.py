@@ -75,9 +75,12 @@ def init_database() -> None:
         else:
             logger.info("管理员账号 %s 已存在，跳过创建。", admin_username)
 
-        # 打印当前数据目录与数据库文件路径，便于在 Render Logs 中排错
-        from auth.database import DB_PATH  # noqa: WPS433
-        logger.info("SQLite DB path: %s (存在=%s)", DB_PATH, DB_PATH.exists())
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        if database_url:
+            logger.info("使用 PostgreSQL 数据库: %s", database_url.split("@")[-1])
+        else:
+            from auth.database import DB_PATH  # noqa: WPS433
+            logger.info("使用 SQLite 数据库: %s (存在=%s)", DB_PATH, DB_PATH.exists())
     except Exception:
         logger.error("初始化管理员账号失败:\n%s", traceback.format_exc())
         raise

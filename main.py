@@ -1,8 +1,11 @@
-"""文件下载中心 - FastAPI 后端入口."""
+"""文件下载中心 - FastAPI 后端入口.
+
+文件持久化存储：Cloudflare R2（S3 API）
+数据库：Render PostgreSQL（DATABASE_URL），本地开发回退到 SQLite
+"""
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from contextlib import asynccontextmanager
@@ -11,16 +14,18 @@ from typing import Annotated, List
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 # 加载 .env 环境变量
 load_dotenv()
 
-from auth.database import Base, engine
-from auth.models import User
+from auth.database import Base, SessionLocal, engine, get_db
+from auth.models import FileRecord, Series, User
 from auth.router import router as auth_router
 from auth.security import require_admin
+from storage import delete_object, get_object_url, r2_enabled, upload_object
 
 
 @asynccontextmanager
@@ -37,15 +42,7 @@ app = FastAPI(title="文件下载中心", lifespan=lifespan)
 app.include_router(auth_router)
 
 BASE_DIR = Path(__file__).resolve().parent
-# 文件存储目录：优先使用 DATA_DIR 环境变量，便于部署到 Render / Docker 等环境
-# Render 免费版磁盘为临时存储，建议在 Render 环境变量中设置 DATA_DIR=/tmp/data
-_DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "files"))
-FILES_DIR = _DATA_DIR
 STATIC_DIR = BASE_DIR / "static"
-SERIES_META_FILE = FILES_DIR / ".series.json"
-
-# 确保目录存在
-FILES_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -84,9 +81,7 @@ def _is_safe_filename(filename: str) -> bool:
         return False
     if filename.startswith("."):
         return False
-    if not SAFE_FILENAME_RE.fullmatch(filename):
-        return False
-    return True
+    return bool(SAFE_FILENAME_RE.fullmatch(filename))
 
 
 def _is_safe_extension(ext: str) -> bool:
@@ -96,9 +91,7 @@ def _is_safe_extension(ext: str) -> bool:
     ext_lower = ext.lower()
     if not SAFE_EXT_RE.fullmatch(ext_lower):
         return False
-    if ext_lower in BLOCKED_EXTENSIONS:
-        return False
-    return True
+    return ext_lower not in BLOCKED_EXTENSIONS
 
 
 def _format_size(size_bytes: int) -> str:
@@ -112,31 +105,17 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
-def _parse_series_version(filename: str) -> tuple[str, str]:
-    """从文件名解析系列名与版本号，格式为 {系列}_{版本}.{扩展名}."""
-    name = Path(filename).stem  # 移除扩展名
-    if "_" not in name:
-        return name, ""
-    series, version = name.rsplit("_", 1)
-    return series, version
+def _build_object_key(series: str, filename: str) -> str:
+    """构建 R2 对象键，按系列分目录存储."""
+    return f"{series}/{filename}"
 
 
-def _get_series_files(series: str) -> list[Path]:
-    """获取指定系列的所有文件路径."""
-    files = []
-    for item in FILES_DIR.iterdir():
-        if item.is_file() and not item.name.startswith("."):
-            s, _ = _parse_series_version(item.name)
-            if s == series:
-                files.append(item)
-    return sorted(files)
-
-
-def _next_version_number(series: str) -> int:
+def _next_version_number(db: Session, series: str) -> int:
     """获取该系列下一个可用的版本号."""
+    records = db.query(FileRecord).filter(FileRecord.series == series).all()
     max_version = 0
-    for item in _get_series_files(series):
-        _, version = _parse_series_version(item.name)
+    for record in records:
+        version = record.version
         if version.lower().startswith("v"):
             try:
                 num = int(version[1:])
@@ -144,56 +123,6 @@ def _next_version_number(series: str) -> int:
             except ValueError:
                 pass
     return max_version + 1
-
-
-def _load_series_meta() -> set[str]:
-    """加载已创建的系列名集合。"""
-    if not SERIES_META_FILE.exists():
-        return set()
-    try:
-        data = json.loads(SERIES_META_FILE.read_text(encoding="utf-8"))
-        return {str(x) for x in data.get("series", [])}
-    except (json.JSONDecodeError, OSError):
-        return set()
-
-
-def _save_series_meta(series_set: set[str]) -> None:
-    """保存已创建的系列名集合。"""
-    SERIES_META_FILE.write_text(
-        json.dumps(
-            {"series": sorted(series_set)},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-
-def _add_series_meta(series: str) -> None:
-    """将系列加入元数据集合。"""
-    series_set = _load_series_meta()
-    series_set.add(series)
-    _save_series_meta(series_set)
-
-
-def _remove_series_meta(series: str) -> None:
-    """从元数据集合中移除系列。"""
-    series_set = _load_series_meta()
-    if series in series_set:
-        series_set.discard(series)
-        _save_series_meta(series_set)
-
-
-def _series_exists(series: str) -> bool:
-    """判断系列是否存在（文件或元数据中任一存在）."""
-    if series in _load_series_meta():
-        return True
-    for item in FILES_DIR.iterdir():
-        if item.is_file() and not item.name.startswith("."):
-            s, _ = _parse_series_version(item.name)
-            if s == series:
-                return True
-    return False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -206,25 +135,25 @@ async def index() -> str:
 
 
 @app.get("/files")
-async def list_files() -> List[dict]:
-    """返回按系列分组的可下载文件列表，支持任意扩展名。"""
+async def list_files(
+    db: Annotated[Session, Depends(get_db)],
+) -> List[dict]:
+    """返回按系列分组的可下载文件列表."""
+    records = db.query(FileRecord).order_by(FileRecord.filename).all()
+    series_names = {s.name for s in db.query(Series).all()}
+
     groups: dict[str, list[dict]] = {}
+    for record in records:
+        ext = Path(record.filename).suffix
+        display_version = f"{record.version}{ext}" if record.version else record.filename
+        groups.setdefault(record.series, []).append({
+            "name": record.filename,
+            "version": display_version,
+            "size": _format_size(record.size),
+        })
 
-    # 先添加已有文件的系列
-    for item in sorted(FILES_DIR.iterdir()):
-        if item.is_file() and not item.name.startswith("."):
-            series, version = _parse_series_version(item.name)
-            ext = item.suffix
-            # 显示用版本号 = 解析出的版本号 + 原扩展名（如 v1.pdf、v2.docx）
-            display_version = f"{version}{ext}" if version else item.name
-            groups.setdefault(series, []).append({
-                "name": item.name,
-                "version": display_version,
-                "size": _format_size(item.stat().st_size),
-            })
-
-    # 再补充仅有元数据但还没有文件的空系列
-    for series in _load_series_meta():
+    # 补充空系列
+    for series in series_names:
         groups.setdefault(series, [])
 
     result = []
@@ -239,16 +168,21 @@ async def list_files() -> List[dict]:
 @app.post("/api/series")
 async def create_series(
     current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
     name: str = Form(...),
 ) -> JSONResponse:
-    """创建新系列（不再生成占位文件，系列独立于具体文件类型）。"""
+    """创建新系列."""
+    name = name.strip()
     if not _is_safe_series_name(name):
         raise HTTPException(status_code=400, detail="非法系列名")
 
-    if _series_exists(name):
+    existing = db.query(Series).filter(Series.name == name).first()
+    if existing:
         raise HTTPException(status_code=409, detail="系列已存在")
 
-    _add_series_meta(name)
+    series = Series(name=name)
+    db.add(series)
+    db.commit()
     return JSONResponse({"series": name, "message": "系列创建成功"})
 
 
@@ -256,38 +190,65 @@ async def create_series(
 async def upload_file(
     series: str,
     current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
 ) -> JSONResponse:
-    """向指定系列上传任意类型文件，自动命名为 {series}_vN.{原扩展名}。"""
+    """向指定系列上传文件，自动命名并上传到 R2，同时写入数据库."""
+    if not r2_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="R2 对象存储未配置，无法上传文件",
+        )
+
     if not _is_safe_series_name(series):
         raise HTTPException(status_code=400, detail="非法系列名")
-
-    if not _series_exists(series):
-        raise HTTPException(status_code=404, detail="系列不存在")
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名为空")
 
-    # 解析并校验扩展名
     original_ext = Path(file.filename).suffix
     if not _is_safe_extension(original_ext.lower()):
         raise HTTPException(status_code=400, detail="非法的文件扩展名")
 
-    # 读取文件内容（二进制）
-    content = await file.read()
+    series_obj = db.query(Series).filter(Series.name == series).first()
+    if not series_obj:
+        raise HTTPException(status_code=404, detail="系列不存在")
 
-    next_version = _next_version_number(series)
+    content = await file.read()
+    size = len(content)
+    mime_type = file.content_type or "application/octet-stream"
+
+    next_version = _next_version_number(db, series)
     safe_ext = original_ext.lower()
     filename = f"{series}_v{next_version}{safe_ext}"
-    target = FILES_DIR / filename
 
-    # 防止意外冲突
-    while target.exists():
+    # 防止版本号冲突（理论上不会发生，但做兜底）
+    while db.query(FileRecord).filter(FileRecord.filename == filename).first():
         next_version += 1
         filename = f"{series}_v{next_version}{safe_ext}"
-        target = FILES_DIR / filename
 
-    target.write_bytes(content)
+    object_key = _build_object_key(series, filename)
+
+    try:
+        upload_object(object_key, content, content_type=mime_type)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"上传到 R2 失败: {exc}",
+        ) from exc
+
+    record = FileRecord(
+        series=series,
+        filename=filename,
+        version=f"v{next_version}",
+        size=size,
+        mime_type=mime_type,
+        object_key=object_key,
+    )
+    db.add(record)
+    db.commit()
+
+    await file.close()
     return JSONResponse({"filename": filename, "message": "上传成功"})
 
 
@@ -295,21 +256,36 @@ async def upload_file(
 async def delete_series(
     series: str,
     current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
-    """删除整个系列及其所有文件。"""
+    """删除整个系列及其在 R2 上的所有文件."""
     if not _is_safe_series_name(series):
         raise HTTPException(status_code=400, detail="非法系列名")
 
+    records = db.query(FileRecord).filter(FileRecord.series == series).all()
+    if not records:
+        series_obj = db.query(Series).filter(Series.name == series).first()
+        if not series_obj:
+            raise HTTPException(status_code=404, detail="系列不存在")
+
     deleted = 0
-    for item in _get_series_files(series):
-        item.unlink()
+    for record in records:
+        if r2_enabled():
+            try:
+                delete_object(record.object_key)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"删除 R2 对象失败: {exc}",
+                ) from exc
+        db.delete(record)
         deleted += 1
 
-    _remove_series_meta(series)
+    series_obj = db.query(Series).filter(Series.name == series).first()
+    if series_obj:
+        db.delete(series_obj)
 
-    if deleted == 0 and not _series_exists(series):
-        raise HTTPException(status_code=404, detail="系列不存在")
-
+    db.commit()
     return JSONResponse(
         {"message": f"系列 {series} 及其 {deleted} 个文件已删除"},
     )
@@ -320,48 +296,64 @@ async def delete_file(
     series: str,
     filename: str,
     current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
-    """删除系列内指定文件。"""
+    """删除系列内指定文件（数据库记录 + R2 对象）."""
     if not _is_safe_series_name(series):
         raise HTTPException(status_code=400, detail="非法系列名")
     if not _is_safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
 
-    file_series, _ = _parse_series_version(filename)
-    if file_series != series:
-        raise HTTPException(status_code=400, detail="文件不属于该系列")
-
-    file_path = FILES_DIR / filename
-    # 再次确保解析后的路径仍在 FILES_DIR 内
-    if not str(file_path.resolve()).startswith(str(FILES_DIR.resolve())):
-        raise HTTPException(status_code=400, detail="非法文件路径")
-
-    if not file_path.exists() or not file_path.is_file():
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.series == series, FileRecord.filename == filename)
+        .first()
+    )
+    if not record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    file_path.unlink()
+    if r2_enabled():
+        try:
+            delete_object(record.object_key)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"删除 R2 对象失败: {exc}",
+            ) from exc
+
+    db.delete(record)
+    db.commit()
     return JSONResponse({"message": f"文件 {filename} 已删除"})
 
 
 @app.get("/download/{filename}")
-async def download_file(filename: str) -> FileResponse:
-    """下载指定文件，支持任意扩展名。"""
+async def download_file(
+    filename: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """下载指定文件：重定向到 R2 预签名链接或公开 URL."""
     if not _is_safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
 
-    file_path = FILES_DIR / filename
-    # 再次确保解析后的路径仍在 FILES_DIR 内
-    if not str(file_path.resolve()).startswith(str(FILES_DIR.resolve())):
-        raise HTTPException(status_code=400, detail="非法文件路径")
-
-    if not file_path.exists() or not file_path.is_file():
+    record = db.query(FileRecord).filter(FileRecord.filename == filename).first()
+    if not record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    return FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type="application/octet-stream",
-    )
+    if not r2_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="R2 对象存储未配置，无法下载文件",
+        )
+
+    try:
+        url = get_object_url(record.object_key)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取 R2 下载链接失败: {exc}",
+        ) from exc
+
+    return RedirectResponse(url=url)
 
 
 @app.post("/api/admin/reset-password")
@@ -369,7 +361,7 @@ async def reset_admin_password(
     token: str,
     new_password: str,
 ) -> JSONResponse:
-    """紧急重置管理员密码（无需登录）。
+    """紧急重置管理员密码（无需登录）.
 
     需要同时满足以下条件：
     1. 环境变量 ``ADMIN_INIT_TOKEN`` 已设置且与请求中的 ``token`` 匹配
@@ -394,9 +386,7 @@ async def reset_admin_password(
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="密码长度至少 6 位")
 
-    from auth.database import SessionLocal  # noqa: WPS433
-    from auth.models import User  # noqa: WPS433
-    from auth.security import get_password_hash  # noqa: WPS433
+    from auth.security import get_password_hash
 
     admin_username = os.environ.get("ADMIN_USERNAME", "Glaive").strip() or "Glaive"
     db = SessionLocal()
@@ -423,13 +413,10 @@ async def reset_admin_password(
 
 @app.get("/api/admin/diag")
 async def admin_diag() -> JSONResponse:
-    """诊断端点：返回管理员账号状态、数据库路径、JWT 配置（不泄露密钥）。
+    """诊断端点：返回管理员账号状态与存储配置（不泄露密钥）.
 
     用于部署后排查登录问题，无需鉴权（仅返回只读信息）。
     """
-    from auth.database import DB_PATH, SessionLocal  # noqa: WPS433
-    from auth.models import User  # noqa: WPS433
-
     admin_username = os.environ.get("ADMIN_USERNAME", "Glaive").strip() or "Glaive"
     secret_configured = bool(os.environ.get("SECRET_KEY"))
 
@@ -447,9 +434,8 @@ async def admin_diag() -> JSONResponse:
         db.close()
 
     return JSONResponse({
-        "db_path": str(DB_PATH),
-        "db_exists": DB_PATH.exists(),
-        "data_dir": str(FILES_DIR),
+        "database_url_configured": bool(os.environ.get("DATABASE_URL")),
+        "r2_configured": r2_enabled(),
         "admin_username": admin_username,
         "admin_exists": admin_info is not None,
         "admin_info": admin_info,
