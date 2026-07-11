@@ -578,6 +578,29 @@ async def admin_stats(
     })
 
 
+@app.delete("/api/admin/users/{username}")
+async def delete_user(
+    username: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员专用：删除指定用户（不可删除自己）."""
+    username = username.strip()
+    if not _is_safe_filename(username):
+        raise HTTPException(status_code=400, detail="非法的用户名")
+
+    if username == current_user.username:
+        raise HTTPException(status_code=400, detail="不能删除自己的账号")
+
+    target = db.query(User).filter(User.username == username).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    db.delete(target)
+    db.commit()
+    return JSONResponse({"message": f"用户 {username} 已删除"})
+
+
 if __name__ == "__main__":
     import uvicorn
 

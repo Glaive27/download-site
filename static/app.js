@@ -303,11 +303,37 @@ function renderStats(data) {
         userBox.innerHTML = '<li class="stats-empty">暂无注册账号</li>';
     } else {
         userBox.innerHTML = data.users.map(u => `
-            <li class="stats-user-row">
-                <span class="stats-user-name">${escapeHtml(u.username)}</span>
-                <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
+            <li class="stats-user-row" data-username="${escapeHtml(u.username)}">
+                <span class="stats-user-info">
+                    <span class="stats-user-name">${escapeHtml(u.username)}</span>
+                    <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
+                </span>
+                <button class="btn btn-danger btn-sm stats-user-del" data-user="${escapeHtml(u.username)}">删除</button>
             </li>
         `).join('');
+
+        // 绑定删除按钮事件
+        userBox.querySelectorAll('.stats-user-del').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const uname = btn.dataset.user;
+                if (!confirm(`确定要删除用户「${uname}」吗？此操作不可恢复。`)) return;
+                try {
+                    const token = localStorage.getItem(TOKEN_KEY);
+                    const res = await fetch(`/api/admin/users/${encodeURIComponent(uname)}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                    });
+                    if (res.ok) {
+                        fetchStats();  // 刷新列表
+                    } else {
+                        const err = await res.json().catch(() => ({ detail: '删除失败' }));
+                        alert(err.detail || '删除失败');
+                    }
+                } catch (e) {
+                    alert('请求失败，请重试');
+                }
+            });
+        });
     }
 }
 

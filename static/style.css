@@ -235,6 +235,26 @@ body {
     box-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
 }
 
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    border-radius: 6px;
+}
+
+.stats-user-del {
+    flex-shrink: 0;
+    margin-left: 10px;
+    opacity: 0.7;
+    transition: opacity 0.2s, background-color 0.2s;
+}
+
+.stats-user-del:hover {
+    opacity: 1;
+    background-color: var(--danger);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(248, 113, 113, 0.35);
+}
+
 .btn-icon {
     padding: 6px;
     background-color: transparent;
@@ -837,9 +857,19 @@ body {
     border: 1px solid var(--card-border);
 }
 
+.stats-user-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
 .stats-user-name {
     font-weight: 600;
     color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .stats-user-role {
