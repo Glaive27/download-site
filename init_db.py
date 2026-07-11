@@ -14,7 +14,7 @@ import sys
 import traceback
 
 from auth.database import Base, SessionLocal, engine
-from auth.models import User
+from auth.models import FileRecord, User
 from auth.security import get_password_hash
 
 logger = logging.getLogger("init_db")
@@ -29,14 +29,16 @@ if not logger.handlers:
 
 
 def _auto_migrate() -> None:
-    """自动迁移：为已有表添加新增列（PostgreSQL / SQLite 兼容）.
+    """自动迁移：基于 ORM 模型动态补齐 file_records 表缺失的列.
 
     SQLAlchemy 的 create_all 只创建不存在的表，不会给已有表添加新列。
-    此函数在启动时检查并补全缺失的列，避免手动执行 SQL 迁移脚本。
+    本函数动态对比 FileRecord 模型与数据库实际列，自动 ALTER TABLE ADD COLUMN，
+    覆盖所有缺失列（如 original_filename、file_data、file_mime、created_at 等），
+    避免手动维护迁移列表导致漏列（漏列会让 /files 查询直接 500）。
 
     本函数内部完全容错，任何异常都不会导致应用启动失败。
     """
-    from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+    from sqlalchemy import DateTime, inspect as _sa_inspect, text as _sa_text
 
     try:
         is_postgres = engine.dialect.name == "postgresql"
@@ -44,38 +46,53 @@ def _auto_migrate() -> None:
         is_postgres = False
 
     try:
-        inspector = _sa_inspect(engine)
-        existing_columns = {col["name"] for col in inspector.get_columns("file_records")}
+        existing_columns = {
+            col["name"] for col in _sa_inspect(engine).get_columns("file_records")
+        }
     except Exception:
-        # 表可能还不存在，跳过迁移
+        # 表可能还不存在，create_all 会负责创建完整表
         return
-
-    migrations = [
-        ("original_filename", "VARCHAR(255)"),
-        ("file_data", "BYTEA" if is_postgres else "BLOB"),
-        ("file_mime", "VARCHAR(100)"),
-    ]
 
     db = SessionLocal()
     try:
-        for column_name, column_type in migrations:
-            if column_name in existing_columns:
+        for col in FileRecord.__table__.columns:
+            col_name = col.name
+            if col_name == "id":  # 主键不会缺失
+                continue
+            if col_name in existing_columns:
                 continue
             try:
+                # 用 SQLAlchemy 方言把列类型编译成数据库原生 DDL 类型
+                col_type = col.type.compile(dialect=engine.dialect)
+                # 第一步：先以可空方式添加列。
+                # 注意：SQLite 旧版本不允许 ADD COLUMN 使用非恒定默认值（如 CURRENT_TIMESTAMP），
+                # 因此这里不写 DEFAULT，改为后续 UPDATE 填充，PostgreSQL / SQLite 均可兼容。
+                add_ddl = f'ALTER TABLE file_records ADD COLUMN "{col_name}" {col_type}'
                 if is_postgres:
-                    db.execute(_sa_text(
-                        f'ALTER TABLE file_records ADD COLUMN IF NOT EXISTS "{column_name}" {column_type}'
-                    ))
-                else:
-                    # SQLite 不支持 IF NOT EXISTS + ADD COLUMN，用 try/except 容错
-                    db.execute(_sa_text(
-                        f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}"
-                    ))
+                    add_ddl = add_ddl.replace(" ADD COLUMN ", " ADD COLUMN IF NOT EXISTS ")
+                db.execute(_sa_text(add_ddl))
                 db.commit()
-                logger.info("✓ 自动迁移: file_records 表已添加 %s 列", column_name)
-            except Exception:
+                logger.info("✓ 自动迁移: file_records 表已添加 %s 列", col_name)
+
+                # 第二步：若模型定义该列非空，先填充历史空值，再（仅 PG）设为 NOT NULL
+                if not col.nullable:
+                    if isinstance(col.type, DateTime):
+                        default_expr = "CURRENT_TIMESTAMP"
+                    else:
+                        default_expr = "''"
+                    db.execute(_sa_text(
+                        f'UPDATE file_records SET "{col_name}" = {default_expr} '
+                        f'WHERE "{col_name}" IS NULL'
+                    ))
+                    db.commit()
+                    if is_postgres:
+                        db.execute(_sa_text(
+                            f'ALTER TABLE file_records ALTER COLUMN "{col_name}" SET NOT NULL'
+                        ))
+                        db.commit()
+            except Exception as exc:
                 db.rollback()
-                logger.warning("⚠ 自动迁移 %s 列失败（可能已存在），忽略", column_name)
+                logger.warning("⚠ 自动迁移 %s 列失败（已忽略）: %s", col_name, exc)
     finally:
         db.close()
 
