@@ -33,8 +33,15 @@ def _auto_migrate() -> None:
 
     SQLAlchemy 的 create_all 只创建不存在的表，不会给已有表添加新列。
     此函数在启动时检查并补全缺失的列，避免手动执行 SQL 迁移脚本。
+
+    本函数内部完全容错，任何异常都不会导致应用启动失败。
     """
     from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+
+    try:
+        is_postgres = engine.dialect.name == "postgresql"
+    except Exception:
+        is_postgres = False
 
     try:
         inspector = _sa_inspect(engine)
@@ -45,16 +52,17 @@ def _auto_migrate() -> None:
 
     migrations = [
         ("original_filename", "VARCHAR(255)"),
-        ("file_data", "BYTEA" if "postgres" in str(engine.url.dialect).lower() else "BLOB"),
+        ("file_data", "BYTEA" if is_postgres else "BLOB"),
         ("file_mime", "VARCHAR(100)"),
     ]
 
     db = SessionLocal()
-    for column_name, column_type in migrations:
-        if column_name not in existing_columns:
+    try:
+        for column_name, column_type in migrations:
+            if column_name in existing_columns:
+                continue
             try:
-                dialect = str(engine.url.dialect).lower()
-                if "postgres" in dialect:
+                if is_postgres:
                     db.execute(_sa_text(
                         f'ALTER TABLE file_records ADD COLUMN IF NOT EXISTS "{column_name}" {column_type}'
                     ))
@@ -68,7 +76,8 @@ def _auto_migrate() -> None:
             except Exception:
                 db.rollback()
                 logger.warning("⚠ 自动迁移 %s 列失败（可能已存在），忽略", column_name)
-    db.close()
+    finally:
+        db.close()
 
 
 def init_database() -> None:
