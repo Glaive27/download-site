@@ -774,3 +774,57 @@ class TestSessionStatus:
         )
         assert resp.status_code == 200
         assert resp.json()["flagged"] is True
+
+
+class TestDownloadRequiresAuth:
+    """下载接口必须登录才能访问（未登录无法下载文件）."""
+
+    def _make_file(self, db_session: Session, filename: str, series: str, original: str | None = None) -> FileRecord:
+        rec = FileRecord(
+            series=series,
+            filename=filename,
+            original_filename=original,
+            version="v1",
+            size=10,
+            mime_type="application/zip",
+            object_key=f"{series}/{filename}",
+            file_data=b"filedata",
+            file_mime="application/zip",
+        )
+        db_session.add(rec)
+        db_session.commit()
+        db_session.refresh(rec)
+        return rec
+
+    def _token(self, client: TestClient, username: str, password: str) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": username, "password": password, "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_download_requires_auth(self, client: TestClient, db_session: Session):
+        """未登录直接 GET /download 应返回 401，无法获取文件."""
+        self._make_file(db_session, "s1_v1.zip", "s1", "实例.zip")
+        resp = client.get("/download/s1_v1.zip")
+        assert resp.status_code == 401
+
+    def test_download_works_when_logged_in(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+    ):
+        """已登录用户 GET /download 应成功返回文件内容."""
+        self._make_file(db_session, "s1_v1.zip", "s1", "实例.zip")
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.get(
+            "/download/s1_v1.zip",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.content == b"filedata"
+        # 下载量应累加 1
+        db_session.refresh(normal_user)
+        rec = db_session.query(FileRecord).filter_by(filename="s1_v1.zip").first()
+        assert rec.download_count == 1

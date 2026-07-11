@@ -1128,16 +1128,50 @@ function showDownloadToast(filename, state, title) {
 }
 
 /**
- * 程序化触发真实文件下载（同一用户手势内，浏览器允许）。
- * 原 <a> 的默认导航已被 preventDefault，这里用临时锚点重新发起 GET /download。
+ * 程序化触发真实文件下载。
+ * 下载接口要求登录（后端校验 Bearer 令牌），故用 fetch 携带 Authorization 头，
+ * 取回二进制后通过 Blob + 临时锚点触发下载（避免把 JWT 暴露在 URL 中）。
+ * @returns {Promise<boolean>} 下载是否成功发起
  */
-function triggerDownload(url) {
-    const a = document.createElement('a');
-    a.href = url;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+async function triggerDownload(url, fallbackName) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    let resp;
+    try {
+        resp = await fetch(url, { headers, credentials: 'same-origin' });
+    } catch (e) {
+        return false;
+    }
+    if (resp.status === 401 || resp.status === 403) {
+        // 未登录 / 令牌失效：由调用方拦截并提示，这里兜底返回失败
+        return false;
+    }
+    if (!resp.ok) {
+        return false;
+    }
+    // 从 Content-Disposition 解析服务端指定的原始文件名（UTF-8 形式）
+    let dlName = fallbackName || '';
+    const cd = resp.headers.get('Content-Disposition');
+    if (cd) {
+        const m = cd.match(/filename\*=UTF-8''([^;]+)/);
+        if (m) dlName = decodeURIComponent(m[1]);
+    }
+    try {
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = dlName || '';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
@@ -1150,7 +1184,7 @@ function triggerDownload(url) {
  */
 function bindDownloadTracking() {
     document.querySelectorAll('.download-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', async (e) => {
             e.preventDefault();  // 由我们控制实际下载触发，便于防抖与提示
             if (btn.dataset.downloading === '1') {
                 // 冷却期内重复点击：直接提示，不再触发服务器请求
@@ -1161,26 +1195,29 @@ function bindDownloadTracking() {
             const url = btn.getAttribute('href');
             if (!filename || !url) return;
 
+            // 未登录拦截：下载需登录，未登录直接提示并放弃，不触发服务器请求
+            if (!localStorage.getItem(TOKEN_KEY) || !tokenIsUnexpired()) {
+                showDownloadToast(filename, 'warn', '请先登录后再下载');
+                return;
+            }
+
             // 标记下载中：禁用按钮 + 弹窗反馈
             btn.dataset.downloading = '1';
             btn.classList.add('downloading');
             showDownloadToast(filename, 'downloading', '正在准备下载…');
 
-            // 真正触发下载
-            triggerDownload(url);
+            // 真正触发下载（fetch 携带令牌，未登录/失效由服务端 401 兜底）
+            const ok = await triggerDownload(url, filename);
 
-            // 登录用户上报下载行为（不影响下载本体）
-            const token = localStorage.getItem(TOKEN_KEY);
-            if (token) {
+            if (ok) {
+                // 登录用户上报下载行为（不影响下载本体）
                 authFetch(`/api/download-log/${encodeURIComponent(filename)}`, {
                     method: 'POST',
                 }).catch(() => { /* 统计失败不影响下载 */ });
-            }
-
-            // 短延时后给出「已开始」的明确反馈，随后自动收起
-            setTimeout(() => {
                 showDownloadToast(filename, 'done', '✅ 下载已开始，请到下载列表查看');
-            }, 900);
+            } else {
+                showDownloadToast(filename, 'warn', '下载失败，请先登录后重试');
+            }
 
             // 冷却结束：恢复按钮，允许必要时再次下载
             setTimeout(() => {

@@ -483,9 +483,13 @@ async def session_status(
 @app.get("/download/{filename}")
 async def download_file(
     filename: str,
+    current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """下载指定文件：从数据库读取二进制内容并直接返回文件流."""
+    """下载指定文件：从数据库读取二进制内容并直接返回文件流.
+
+    需登录才能下载——未携带有效令牌将返回 401，防止未授权用户获取文件。
+    """
     if not _is_safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
 
