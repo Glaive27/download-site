@@ -3,6 +3,21 @@
  * 加载文件列表、渲染下载卡片、处理登录/注册、管理员操作
  */
 
+// 全局错误兜底：任何未被捕获的 JS 错误都会在页面顶部以红条显示，
+// 便于在「列表卡住」时快速定位是脚本报错还是单纯的冷启动慢。
+window.addEventListener('error', (e) => {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#ef4444;color:#fff;padding:10px 14px;font-size:13px;font-family:monospace;white-space:pre-wrap;';
+    banner.textContent = '页面脚本错误：' + (e.message || e.error || '未知错误');
+    document.body && document.body.appendChild(banner);
+});
+window.addEventListener('unhandledrejection', (e) => {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f59e0b;color:#000;padding:10px 14px;font-size:13px;font-family:monospace;white-space:pre-wrap;';
+    banner.textContent = '未处理的异步错误：' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+    document.body && document.body.appendChild(banner);
+});
+
 const listEl = document.getElementById('file-list');
 const noticeModal = document.getElementById('notice-modal');
 const noticeClose = document.getElementById('notice-close');
@@ -1006,8 +1021,14 @@ function requestTrajectoryReverify() {
 const FILES_LOAD_TIMEOUT_MS = 45000;
 
 async function refreshFiles() {
-    // 立即给出明确的「加载中」反馈，避免空白导致的卡死观感
-    listEl.innerHTML = '<div class="loading">加载中…</div>';
+    // 立即给出明确的「正在唤醒」反馈，避免空白导致的卡死观感。
+    // 免费实例（Web+数据库）闲置后会休眠，首次访问需冷启动，可能耗时 30~60 秒，
+    // 这里明确告知用户「在等」，避免误以为卡死而反复刷新（刷新会重启冷启动计时）。
+    listEl.innerHTML = `
+        <div class="loading">
+            <div class="spinner" aria-hidden="true"></div>
+            正在连接服务器…（首次访问免费服务需冷启动，可能需 30~60 秒，请稍候不要刷新）
+        </div>`;
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), FILES_LOAD_TIMEOUT_MS);
