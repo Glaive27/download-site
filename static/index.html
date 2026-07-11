@@ -139,6 +139,21 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="login-required-modal">
+        <div class="modal glass-card behavior-card login-required-card" role="alertdialog" aria-modal="true" aria-labelledby="login-required-title">
+            <button class="modal-close" id="login-required-close" aria-label="关闭">&times;</button>
+            <div class="behavior-icon login-required-icon">🔒</div>
+            <h2 class="behavior-title" id="login-required-title">请先登录后再下载</h2>
+            <p class="behavior-desc">
+                下载文件需要先登录账号。请先登录或注册一个账号，即可正常下载本站提供的文件。
+            </p>
+            <div class="login-required-actions">
+                <button class="btn btn-primary" id="login-required-go">去登录</button>
+                <button class="btn btn-ghost" id="login-required-register">去注册</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="trajectory-modal">
         <div class="modal glass-card trajectory-card" role="dialog" aria-modal="true" aria-labelledby="traj-title">
             <button class="modal-close" id="traj-close" aria-label="关闭">&times;</button>

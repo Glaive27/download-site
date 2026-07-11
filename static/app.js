@@ -965,6 +965,20 @@ function requestTrajectoryReverify() {
             logout();
         });
     }
+
+    // 未登录下载 → 弹窗提示，并提供「去登录 / 去注册」入口
+    const loginRequiredModal = document.getElementById('login-required-modal');
+    if (loginRequiredModal) {
+        const hideLoginRequired = () => loginRequiredModal.classList.remove('active');
+        const goLogin = () => { hideLoginRequired(); switchTab('login'); openAuthModal(); };
+        const goRegister = () => { hideLoginRequired(); switchTab('register'); openAuthModal(); };
+        document.getElementById('login-required-close').addEventListener('click', hideLoginRequired);
+        document.getElementById('login-required-go').addEventListener('click', goLogin);
+        document.getElementById('login-required-register').addEventListener('click', goRegister);
+        loginRequiredModal.addEventListener('click', (e) => {
+            if (e.target === loginRequiredModal) hideLoginRequired();
+        });
+    }
     document.getElementById('stats-back').addEventListener('click', showStatsContentView);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
@@ -1195,9 +1209,9 @@ function bindDownloadTracking() {
             const url = btn.getAttribute('href');
             if (!filename || !url) return;
 
-            // 未登录拦截：下载需登录，未登录直接提示并放弃，不触发服务器请求
+            // 未登录拦截：下载需登录，未登录直接弹出提示弹窗并放弃，不触发服务器请求
             if (!localStorage.getItem(TOKEN_KEY) || !tokenIsUnexpired()) {
-                showDownloadToast(filename, 'warn', '请先登录后再下载');
+                showLoginRequired();
                 return;
             }
 
@@ -2015,6 +2029,14 @@ function showSessionAnomaly() {
     const modal = document.getElementById('session-anomaly-modal');
     if (modal) modal.classList.add('active');
     BehaviorMonitor.stop();
+}
+
+/**
+ * 显示「请先登录后再下载」弹窗（未登录用户点击下载按钮时触发）
+ */
+function showLoginRequired() {
+    const modal = document.getElementById('login-required-modal');
+    if (modal) modal.classList.add('active');
 }
 
 /**

@@ -1334,6 +1334,36 @@ altcha-widget {
     width: 100%;
 }
 
+/* ===== 未登录下载提示 ===== */
+.login-required-card {
+    max-width: 400px;
+}
+
+.login-required-icon {
+    color: var(--accent);
+}
+
+.login-required-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.login-required-actions .btn {
+    flex: 1;
+}
+
+.btn-ghost {
+    background: transparent;
+    border: 1px solid var(--card-border);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.btn-ghost:hover {
+    border-color: var(--accent);
+}
+
 /* ===== 鼠标轨迹人机验证 ===== */
 .trajectory-card {
     max-width: 440px;
