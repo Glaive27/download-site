@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>文件下载中心</title>
+    <title>Glaive</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
         <header class="header glass-card">
             <div class="header-top">
                 <div class="header-brand">
-                    <h1>文件下载中心</h1>
+                    <h1>Glaive</h1>
                     <p class="subtitle">支持任意文件类型的上传与下载</p>
                 </div>
                 <div class="header-auth" id="header-auth">
@@ -50,6 +50,23 @@
         <footer class="footer glass-card">
             <p>服务运行于 <span class="port">1234</span> 端口</p>
         </footer>
+    </div>
+
+    <div class="modal-overlay" id="notice-modal">
+        <div class="modal notice-card" role="alertdialog" aria-modal="true" aria-labelledby="notice-title">
+            <button class="modal-close" id="notice-close" aria-label="关闭">&times;</button>
+            <div class="notice-icon">📢</div>
+            <h2 class="notice-title" id="notice-title">温馨提示</h2>
+            <div class="notice-body">
+                <p>欢迎使用 Glaive 文件下载中心。请在使用前阅读以下说明：</p>
+                <ul class="notice-list">
+                    <li>本站所有文件仅供<strong>个人学习、研究与非商业用途</strong>。</li>
+                    <li>严禁将本站文件用于任何<strong>商业用途</strong>，包括但不限于销售、转售、二次分发牟利等行为。</li>
+                    <li>文件版权归原作者所有，下载后使用风险由使用者自行承担。</li>
+                </ul>
+            </div>
+            <div class="notice-progress"><span class="notice-progress-bar"></span></div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="auth-modal">

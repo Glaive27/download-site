@@ -517,6 +517,77 @@ body {
     color: #34d399;
 }
 
+.notice-card {
+    max-width: 420px;
+    text-align: center;
+    padding: 32px 28px 24px;
+}
+
+.notice-icon {
+    font-size: 2.4rem;
+    line-height: 1;
+    margin-bottom: 12px;
+}
+
+.notice-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 16px;
+}
+
+.notice-body {
+    text-align: left;
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.7;
+}
+
+.notice-body p {
+    color: var(--muted);
+    margin-bottom: 12px;
+}
+
+.notice-list {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.notice-list li {
+    color: var(--text);
+}
+
+.notice-list strong {
+    color: var(--danger);
+    font-weight: 700;
+}
+
+.notice-progress {
+    margin-top: 22px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.notice-progress-bar {
+    display: block;
+    height: 100%;
+    width: 100%;
+    border-radius: 999px;
+    background-color: var(--accent);
+    transform-origin: left center;
+    animation: notice-countdown 5s linear forwards;
+}
+
+@keyframes notice-countdown {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
+
 @media (max-width: 640px) {
     body {
         padding-top: 40px;

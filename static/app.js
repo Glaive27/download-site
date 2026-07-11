@@ -4,6 +4,8 @@
  */
 
 const listEl = document.getElementById('file-list');
+const noticeModal = document.getElementById('notice-modal');
+const noticeClose = document.getElementById('notice-close');
 const authBtn = document.getElementById('auth-btn');
 const headerAuth = document.getElementById('header-auth');
 const authModal = document.getElementById('auth-modal');
@@ -31,6 +33,9 @@ const USER_KEY = 'download_site_user';
         updateAuthUI();
     }
     await refreshFiles();
+
+    bindNoticeModal();
+    showNotice();
 
     authBtn.addEventListener('click', openAuthModal);
     modalClose.addEventListener('click', closeAuthModal);
@@ -158,6 +163,36 @@ function updateUploadSeriesSelect(files) {
 
     if (currentValue) {
         uploadSeriesSelect.value = currentValue;
+    }
+}
+
+/**
+ * 绑定提示弹窗的手动关闭事件
+ */
+function bindNoticeModal() {
+    noticeClose.addEventListener('click', closeNotice);
+    noticeModal.addEventListener('click', (e) => {
+        if (e.target === noticeModal) closeNotice();
+    });
+}
+
+/**
+ * 显示提示弹窗，5 秒后自动关闭
+ */
+function showNotice() {
+    noticeModal.classList.add('active');
+    if (window.__noticeTimer) clearTimeout(window.__noticeTimer);
+    window.__noticeTimer = setTimeout(closeNotice, 5000);
+}
+
+/**
+ * 关闭提示弹窗并停止倒计时
+ */
+function closeNotice() {
+    noticeModal.classList.remove('active');
+    if (window.__noticeTimer) {
+        clearTimeout(window.__noticeTimer);
+        window.__noticeTimer = null;
     }
 }
 
