@@ -918,21 +918,99 @@ function bindAdminFileActions() {
 }
 
 /**
- * 绑定文件下载按钮：登录用户点击下载时，异步上报一次下载行为（用于账号历史统计）。
- * 上报为 fire-and-forget，不阻塞原生文件下载（GET /download 仍负责实际传输与总量统计）。
- * 若用户被行为认证标记为异常，authFetch 会自动弹出二次验证并在通过后重试上报。
- * 匿名用户不调用本接口，因此账号历史仅记录登录后的下载。
+ * 下载状态提示弹窗（非阻塞）。
+ * state: 'downloading' | 'done' | 'warn'
+ */
+const DOWNLOAD_COOLDOWN_MS = 3000;  // 同一文件下载冷却期，期间拦截重复点击，避免重复打服务器
+const DOWNLOAD_HIDE_MS = 2600;      // 提示弹窗自动消失延时
+let downloadToastTimer = null;
+
+function showDownloadToast(filename, state, title) {
+    const toast = document.getElementById('download-toast');
+    const icon = document.getElementById('download-toast-icon');
+    const titleEl = document.getElementById('download-toast-title');
+    const fileEl = document.getElementById('download-toast-file');
+    if (!toast) return;
+    const icons = { downloading: '⏳', done: '✅', warn: '⚠️' };
+    toast.classList.remove('hidden', 'warn', 'done');
+    if (state === 'warn') toast.classList.add('warn');
+    if (state === 'done') toast.classList.add('done');
+    icon.textContent = icons[state] || '⏳';
+    if (state === 'downloading') {
+        icon.innerHTML = '<span class="spin">⏳</span>';
+    }
+    titleEl.textContent = title;
+    fileEl.textContent = filename || '';
+    // 重新触发入场动画
+    toast.style.animation = 'none';
+    void toast.offsetWidth;
+    toast.style.animation = '';
+    if (downloadToastTimer) clearTimeout(downloadToastTimer);
+    if (state !== 'downloading') {
+        downloadToastTimer = setTimeout(() => toast.classList.add('hidden'), DOWNLOAD_HIDE_MS);
+    }
+}
+
+/**
+ * 程序化触发真实文件下载（同一用户手势内，浏览器允许）。
+ * 原 <a> 的默认导航已被 preventDefault，这里用临时锚点重新发起 GET /download。
+ */
+function triggerDownload(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+/**
+ * 绑定文件下载按钮：
+ * 1) 拦截点击并弹出「下载状态」提示，让用户明确知道下载已开始，避免反复点击；
+ * 2) 通过 data-downloading 标记 + 冷却期，在冷却期内拦截对同一文件的重复点击，
+ *    杜绝重复触发 GET /download（每次都会累加下载量并重传文件，徒增服务器压力）；
+ * 3) 登录用户仍异步上报一次下载行为（账号历史统计），为 fire-and-forget，不阻塞下载；
+ *    若被行为认证标记为异常，authFetch 会自动弹出二次验证并在通过后重试上报。
  */
 function bindDownloadTracking() {
     document.querySelectorAll('.download-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const token = localStorage.getItem(TOKEN_KEY);
-            if (!token) return;  // 匿名：直接走原生下载，不上报
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();  // 由我们控制实际下载触发，便于防抖与提示
+            if (btn.dataset.downloading === '1') {
+                // 冷却期内重复点击：直接提示，不再触发服务器请求
+                showDownloadToast(btn.dataset.filename, 'warn', '下载已在进行，请稍候…');
+                return;
+            }
             const filename = btn.dataset.filename;
-            if (!filename) return;
-            authFetch(`/api/download-log/${encodeURIComponent(filename)}`, {
-                method: 'POST',
-            }).catch(() => { /* 统计失败不影响下载 */ });
+            const url = btn.getAttribute('href');
+            if (!filename || !url) return;
+
+            // 标记下载中：禁用按钮 + 弹窗反馈
+            btn.dataset.downloading = '1';
+            btn.classList.add('downloading');
+            showDownloadToast(filename, 'downloading', '正在准备下载…');
+
+            // 真正触发下载
+            triggerDownload(url);
+
+            // 登录用户上报下载行为（不影响下载本体）
+            const token = localStorage.getItem(TOKEN_KEY);
+            if (token) {
+                authFetch(`/api/download-log/${encodeURIComponent(filename)}`, {
+                    method: 'POST',
+                }).catch(() => { /* 统计失败不影响下载 */ });
+            }
+
+            // 短延时后给出「已开始」的明确反馈，随后自动收起
+            setTimeout(() => {
+                showDownloadToast(filename, 'done', '✅ 下载已开始，请到下载列表查看');
+            }, 900);
+
+            // 冷却结束：恢复按钮，允许必要时再次下载
+            setTimeout(() => {
+                btn.dataset.downloading = '0';
+                btn.classList.remove('downloading');
+            }, DOWNLOAD_COOLDOWN_MS);
         });
     });
 }
