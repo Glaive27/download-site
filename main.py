@@ -165,11 +165,11 @@ async def list_files(
 
     groups: dict[str, list[dict]] = {}
     for record in records:
-        ext = Path(record.filename).suffix
-        display_version = f"{record.version}{ext}" if record.version else record.filename
+        # 优先显示原始上传的文件名，若没有则使用 version + 扩展名
+        display_name = record.original_filename if record.original_filename else f"{record.version}{Path(record.filename).suffix}"
         groups.setdefault(record.series, []).append({
             "name": record.filename,
-            "version": display_version,
+            "version": display_name,
             "size": _format_size(record.size),
         })
 
@@ -253,6 +253,7 @@ async def upload_file(
     record = FileRecord(
         series=series,
         filename=filename,
+        original_filename=file.filename,
         version=f"v{next_version}",
         size=size,
         mime_type=mime_type,

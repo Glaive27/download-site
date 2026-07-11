@@ -46,7 +46,8 @@ class FileRecord(Base):  # noqa: D101
 
     字段说明：
     - series: 所属系列名
-    - filename: 下载时显示的文件名（如 series_v1.pdf）
+    - filename: 下载时使用的文件名（如 series_v1.pdf）
+    - original_filename: 用户上传时的原始文件名（如 123.zip、实例.zip）
     - version: 版本号（如 v1、v2）
     - size: 文件大小（字节）
     - mime_type: 文件 MIME 类型（用于 /files 列表展示）
@@ -61,6 +62,7 @@ class FileRecord(Base):  # noqa: D101
     id = Column(Integer, primary_key=True, index=True)
     series = Column(String(128), nullable=False, index=True)
     filename = Column(String(255), nullable=False, index=True)
+    original_filename = Column(String(255), nullable=True)
     version = Column(String(32), nullable=False)
     size = Column(Integer, nullable=False)
     mime_type = Column(String(128), nullable=False)
