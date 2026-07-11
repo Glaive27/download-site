@@ -1000,17 +1000,40 @@ function requestTrajectoryReverify() {
 /**
  * 从后端刷新文件列表
  */
+// 文件列表加载超时（毫秒）：Render 免费实例与数据库都会休眠，
+// 首个依赖 DB 的查询可能阻塞很久（30~60s 冷启动）。超过该时间视为加载失败并提示重试，
+// 避免界面看起来「永久卡死」。该值独立于 warmUpServer 的预热超时。
+const FILES_LOAD_TIMEOUT_MS = 45000;
+
 async function refreshFiles() {
+    // 立即给出明确的「加载中」反馈，避免空白导致的卡死观感
+    listEl.innerHTML = '<div class="loading">加载中…</div>';
     try {
-        const response = await fetch('/files');
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), FILES_LOAD_TIMEOUT_MS);
+        let response;
+        try {
+            response = await fetch('/files', { signal: controller.signal, cache: 'no-store' });
+        } finally {
+            clearTimeout(timer);
+        }
         if (!response.ok) {
-            throw new Error('获取文件列表失败');
+            throw new Error(`服务器返回 ${response.status}`);
         }
         const files = await response.json();
         renderFiles(files);
         updateUploadSeriesSelect(files);
     } catch (error) {
-        listEl.innerHTML = `<div class="empty">加载失败：${escapeHtml(error.message)}</div>`;
+        const msg = (error && error.name === 'AbortError')
+            ? '加载超时：服务器或数据库可能正在冷启动，请稍后重试'
+            : (error && error.message ? error.message : '获取文件列表失败');
+        listEl.innerHTML = `
+            <div class="empty file-list-error">
+                <span>⚠️ ${escapeHtml(msg)}</span>
+                <button class="btn btn-primary btn-sm" id="retry-files-btn" type="button">重试</button>
+            </div>`;
+        const retryBtn = document.getElementById('retry-files-btn');
+        if (retryBtn) retryBtn.addEventListener('click', refreshFiles);
     }
 }
 
@@ -1020,10 +1043,19 @@ async function refreshFiles() {
  */
 async function warmUpServer() {
     try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 60000);  // 最多等 60s
-        await fetch('/api/health', { signal: controller.signal, cache: 'no-store' });
-        clearTimeout(timer);
+        // 1) 探活：等待 Web 实例冷启动完成（最多 60s）
+        const hc = new AbortController();
+        const t1 = setTimeout(() => hc.abort(), 60000);
+        await fetch('/api/health', { signal: hc.signal, cache: 'no-store' });
+        clearTimeout(t1);
+
+        // 2) 唤醒数据库：Render 免费实例的 Postgres 也会休眠，首个查询会阻塞很久。
+        //    未登录用户不会走 fetchCurrentUser（不触库），所以这里主动打一次 /files，
+        //    把 DB 唤醒的等待吸收在预热阶段，后续 refreshFiles 命中已唤醒的连接即快速返回。
+        const dbc = new AbortController();
+        const t2 = setTimeout(() => dbc.abort(), 60000);
+        await fetch('/files', { signal: dbc.signal, cache: 'no-store' }).catch(() => {});
+        clearTimeout(t2);
     } catch (e) {
         // 即使失败也继续：后续操作会自行重试/报错
     } finally {

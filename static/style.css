@@ -540,6 +540,18 @@ body {
     padding: 40px 0;
 }
 
+.file-list-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.file-list-error .btn {
+    width: auto;
+    min-width: 120px;
+}
+
 .footer {
     text-align: center;
     margin-top: 40px;
