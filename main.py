@@ -10,6 +10,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, List
@@ -28,7 +29,9 @@ load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
 from auth.models import FileRecord, Series, UniqueVisitor, User
+from altcha import create_challenge_v1
 from auth.router import router as auth_router
+from auth.altcha import ALTCHA_HMAC_KEY
 from auth.security import get_current_user, require_admin
 from storage import delete_object, r2_enabled
 
@@ -508,6 +511,24 @@ async def health_check() -> JSONResponse:
     return JSONResponse({"status": "ok", "database": db_ok})
 
 
+@app.get("/api/altcha/challenge")
+async def altcha_challenge() -> JSONResponse:
+    """返回一个新的 ALTCHA 人机验证挑战（Proof-of-Work）。
+
+    挑战包含一次性 HMAC 签名，并设置 10 分钟有效期。前端 ``<altcha-widget>``
+    拉取后在浏览器端完成算力证明，提交时仅回传一段 base64 凭证；服务端只需
+    做一次 HMAC 校验即可判定真伪，对服务器几乎零负担（自托管、无需第三方 API）。
+    """
+    expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+    challenge = create_challenge_v1(
+        hmac_key=ALTCHA_HMAC_KEY,
+        algorithm="SHA-256",
+        max_number=1000000,
+        expires=expires,
+    )
+    return JSONResponse(challenge.to_dict())
+
+
 @app.post("/api/active-ping")
 async def active_ping(
     db: Annotated[Session, Depends(get_db)],
@@ -626,8 +647,8 @@ async def delete_my_account(
 ) -> JSONResponse:
     """当前登录用户注销自己的账号（仅普通用户，管理员豁免）.
 
-    用于人机验证机制在判定为机器人后的自动注销：彻底删除该用户记录，
-    清除其全部账号信息。管理员账号不受此机制约束，调用本接口返回 403。
+    彻底删除该用户记录、清除其全部账号信息。管理员账号不受此接口约束，
+    调用时返回 403。
     """
     if auth_user.role == "admin":
         raise HTTPException(status_code=403, detail="管理员账号不可注销")

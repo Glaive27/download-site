@@ -36,6 +36,9 @@ services:
       # 紧急重置密码端点令牌（可选）
       - key: ADMIN_INIT_TOKEN
         generateValue: true
+      # ALTCHA 人机验证（Proof-of-Work CAPTCHA）HMAC 密钥
+      - key: ALTCHA_HMAC_KEY
+        generateValue: true
 
 databases:
   - name: download-site-db

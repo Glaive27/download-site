@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Glaive</title>
     <link rel="stylesheet" href="/static/style.css">
+    <script async defer src="/static/altcha.js" type="module"></script>
 </head>
 <body>
     <div class="online-badge hidden" id="online-badge" title="当前在线访问数（仅管理员可见）">
@@ -91,6 +92,7 @@
                 <input type="text" id="login-username" name="username" required minlength="3" maxlength="32" placeholder="请输入用户名">
                 <label for="login-password">密码</label>
                 <input type="password" id="login-password" name="password" required minlength="6" maxlength="128" placeholder="请输入密码">
+                <altcha-widget id="login-altcha" challenge="/api/altcha/challenge" name="altcha"></altcha-widget>
                 <button type="submit" class="btn btn-primary">登录</button>
             </form>
             <form class="auth-form hidden" id="register-form">
@@ -98,6 +100,7 @@
                 <input type="text" id="register-username" name="username" required minlength="3" maxlength="32" placeholder="3-32 位字母/数字/下划线/中文">
                 <label for="register-password">密码</label>
                 <input type="password" id="register-password" name="password" required minlength="6" maxlength="128" placeholder="至少 6 位">
+                <altcha-widget id="register-altcha" challenge="/api/altcha/challenge" name="altcha"></altcha-widget>
                 <button type="submit" class="btn btn-primary">注册</button>
             </form>
             <p class="auth-message" id="auth-message"></p>

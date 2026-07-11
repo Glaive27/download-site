@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from auth.database import get_db
 from auth.models import User
+from auth.altcha import verify_altcha
 from auth.schemas import Token, UserCreate, UserLogin, UserOut, UserRegisterResponse
 from auth.security import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -31,6 +32,9 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 )
 def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
     """用户注册接口."""
+    # 校验 ALTCHA 人机验证（Proof-of-Work）
+    verify_altcha(user_in.altcha)
+
     # 检查用户名是否已存在
     existing = db.query(User).filter(User.username == user_in.username).first()
     if existing:
@@ -60,9 +64,13 @@ def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
 @router.post("/login", response_model=Token)
 def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    altcha: Annotated[str, Form()],
     db: Annotated[Session, Depends(get_db)],
 ):
     """用户登录接口，返回 JWT 访问令牌."""
+    # 校验 ALTCHA 人机验证（Proof-of-Work）
+    verify_altcha(altcha)
+
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(

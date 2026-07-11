@@ -5,6 +5,7 @@
 ## 功能特性
 
 - 用户注册 / 登录（JWT）
+- 登录 / 注册需通过 **ALTCHA 人机验证**（Proof-of-Work CAPTCHA，自托管、对服务器近乎零负担）
 - 管理员可创建系列、上传任意扩展名文件、自动版本号（`v1`, `v2`...）
 - 普通用户可按系列浏览与下载文件
 - 文件持久化存储在 **Cloudflare R2（S3 API）**，服务重启/休眠不丢失
@@ -67,6 +68,7 @@ python main.py
 | `R2_PUBLIC_URL` | （可选）R2 公开访问域名，配置后使用直链而非预签名链接 |
 | `RESET_ADMIN_PASSWORD` | `1` 时启动时强制重置管理员密码为 `ADMIN_PASSWORD` 当前值 |
 | `ADMIN_INIT_TOKEN` | 启用 `POST /api/admin/reset-password` 紧急重置端点（密码丢失时用） |
+| `ALTCHA_HMAC_KEY` | ALTCHA 人机验证 HMAC 密钥（Render 可自动生成），用于签发挑战与校验凭证 |
 
 ### 排查：管理员登录失败
 
@@ -114,7 +116,8 @@ curl -X POST "https://<你的-render-域名>/api/admin/reset-password?token=$ADM
 │   ├── models.py
 │   ├── router.py
 │   ├── schemas.py
-│   └── security.py
+│   ├── security.py
+│   └── altcha.py          # ALTCHA 人机验证（PoW CAPTCHA）校验
 ├── static/              # 前端静态资源
 ├── tests/               # 测试用例
 ├── docs/                # 文档

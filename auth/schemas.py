@@ -30,6 +30,7 @@ class UserCreate(UserBase):  # noqa: D101
     """用户注册请求模型."""
 
     password: str = Field(..., min_length=6, max_length=128)
+    altcha: str = Field(..., min_length=1, description="ALTCHA 人机验证 payload")
 
     @field_validator("password")
     @classmethod

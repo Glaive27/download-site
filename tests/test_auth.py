@@ -2,22 +2,46 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
+from altcha import create_challenge_v1, solve_challenge_v1
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from auth.altcha import ALTCHA_HMAC_KEY
 from auth.models import User
 from auth.security import get_password_hash, verify_password
+
+
+def altcha_payload() -> str:
+    """生成一个通过校验的 ALTCHA payload（模拟前端 widget 解出后的凭证）."""
+    ch = create_challenge_v1(
+        hmac_key=ALTCHA_HMAC_KEY,
+        algorithm="SHA-256",
+        max_number=1000000,
+        expires=None,
+    )
+    sol = solve_challenge_v1(ch, algorithm="SHA-256", max_number=1000000)
+    data = {
+        "algorithm": ch.algorithm,
+        "challenge": ch.challenge,
+        "number": sol.number,
+        "salt": ch.salt,
+        "signature": ch.signature,
+    }
+    return base64.b64encode(json.dumps(data).encode()).decode()
 
 
 class TestRegister:
     """用户注册功能测试."""
 
     def test_register_success(self, client: TestClient):
-        """正常注册新用户."""
+        """正常注册新用户（含有效人机验证）."""
         response = client.post(
             "/auth/register",
-            json={"username": "newuser", "password": "secure123"},
+            json={"username": "newuser", "password": "secure123", "altcha": altcha_payload()},
         )
         assert response.status_code == 201
         data = response.json()
@@ -30,21 +54,38 @@ class TestRegister:
         """重复用户名注册应返回 409."""
         response = client.post(
             "/auth/register",
-            json={"username": "testuser", "password": "another123"},
+            json={"username": "testuser", "password": "another123", "altcha": altcha_payload()},
         )
         assert response.status_code == 409
         assert "已被注册" in response.json()["detail"]
 
+    def test_register_missing_altcha(self, client: TestClient):
+        """缺少人机验证应返回 422（参数校验拦截）."""
+        response = client.post(
+            "/auth/register",
+            json={"username": "newuser", "password": "secure123"},
+        )
+        assert response.status_code == 422
+
+    def test_register_invalid_altcha(self, client: TestClient):
+        """非法人机验证凭证应返回 400."""
+        response = client.post(
+            "/auth/register",
+            json={"username": "newuser", "password": "secure123", "altcha": "not-valid"},
+        )
+        assert response.status_code == 400
+        assert "人机验证" in response.json()["detail"]
+
     @pytest.mark.parametrize(
         "payload,expected_status",
         [
-            ({"username": "ab", "password": "short"}, 422),  # 用户名过短
-            ({"username": "user name", "password": "password1"}, 422),  # 含空格
-            ({"username": "user<script>", "password": "password1"}, 422),  # XSS 尝试
-            ({"username": "user' OR '1'='1", "password": "password1"}, 422),  # 注入尝试
-            ({"username": "validuser", "password": "12345"}, 422),  # 密码过短
-            ({"username": "validuser"}, 422),  # 缺少密码
-            ({"password": "password1"}, 422),  # 缺少用户名
+            ({"username": "ab", "password": "short", "altcha": "X"}, 422),  # 用户名过短
+            ({"username": "user name", "password": "password1", "altcha": "X"}, 422),  # 含空格
+            ({"username": "user<script>", "password": "password1", "altcha": "X"}, 422),  # XSS 尝试
+            ({"username": "user' OR '1'='1", "password": "password1", "altcha": "X"}, 422),  # 注入尝试
+            ({"username": "validuser", "password": "12345", "altcha": "X"}, 422),  # 密码过短
+            ({"username": "validuser", "altcha": "X"}, 422),  # 缺少密码
+            ({"password": "password1", "altcha": "X"}, 422),  # 缺少用户名
         ],
     )
     def test_register_validation(
@@ -53,7 +94,7 @@ class TestRegister:
         payload: dict,
         expected_status: int,
     ):
-        """注册参数校验与安全防护测试."""
+        """注册参数校验与安全防护测试（altcha 占位，422 由字段校验触发）."""
         response = client.post("/auth/register", json=payload)
         assert response.status_code == expected_status
 
@@ -62,21 +103,38 @@ class TestLogin:
     """用户登录功能测试."""
 
     def test_login_success(self, client: TestClient, normal_user: User):
-        """已注册用户使用正确账号密码登录."""
+        """已注册用户使用正确账号密码登录（含有效人机验证）."""
         response = client.post(
             "/auth/login",
-            data={"username": "testuser", "password": "testpass123"},
+            data={"username": "testuser", "password": "testpass123", "altcha": altcha_payload()},
         )
         assert response.status_code == 200
         data = response.json()
         assert "access_token" in data
         assert data["token_type"] == "bearer"
 
+    def test_login_without_altcha(self, client: TestClient, normal_user: User):
+        """缺少人机验证应返回 422."""
+        response = client.post(
+            "/auth/login",
+            data={"username": "testuser", "password": "testpass123"},
+        )
+        assert response.status_code == 422
+
+    def test_login_invalid_altcha(self, client: TestClient, normal_user: User):
+        """非法人机验证凭证应返回 400."""
+        response = client.post(
+            "/auth/login",
+            data={"username": "testuser", "password": "testpass123", "altcha": "bad"},
+        )
+        assert response.status_code == 400
+        assert "人机验证" in response.json()["detail"]
+
     def test_login_wrong_password(self, client: TestClient, normal_user: User):
         """密码错误应返回 401."""
         response = client.post(
             "/auth/login",
-            data={"username": "testuser", "password": "wrongpass"},
+            data={"username": "testuser", "password": "wrongpass", "altcha": altcha_payload()},
         )
         assert response.status_code == 401
         assert "用户名或密码错误" in response.json()["detail"]
@@ -85,7 +143,7 @@ class TestLogin:
         """不存在的用户登录应返回 401."""
         response = client.post(
             "/auth/login",
-            data={"username": "notexist", "password": "anypass"},
+            data={"username": "notexist", "password": "anypass", "altcha": altcha_payload()},
         )
         assert response.status_code == 401
 
@@ -94,10 +152,10 @@ class TestAdminAccount:
     """预设管理员账号测试."""
 
     def test_admin_login(self, client: TestClient, admin_user: User):
-        """管理员 Glaive 使用初始密码登录."""
+        """管理员 Glaive 使用初始密码登录（含有效人机验证）."""
         response = client.post(
             "/auth/login",
-            data={"username": "Glaive", "password": "19866179818"},
+            data={"username": "Glaive", "password": "19866179818", "altcha": altcha_payload()},
         )
         assert response.status_code == 200
         data = response.json()
@@ -116,7 +174,7 @@ class TestAuthorization:
         """辅助方法：登录并返回 Token."""
         response = client.post(
             "/auth/login",
-            data={"username": username, "password": password},
+            data={"username": username, "password": password, "altcha": altcha_payload()},
         )
         return response.json()["access_token"]
 
@@ -184,11 +242,11 @@ class TestSecurity:
     """系统安全性测试."""
 
     def test_sql_injection_prevention(self, client: TestClient):
-        """SQL 注入尝试应被输入校验拦截."""
+        """SQL 注入尝试应被输入校验拦截（altcha 占位，422 由字段校验触发）."""
         payloads = [
-            {"username": "admin'--", "password": "password1"},
-            {"username": "' OR 1=1 --", "password": "password1"},
-            {"username": "user; DROP TABLE users;--", "password": "password1"},
+            {"username": "admin'--", "password": "password1", "altcha": "X"},
+            {"username": "' OR 1=1 --", "password": "password1", "altcha": "X"},
+            {"username": "user; DROP TABLE users;--", "password": "password1", "altcha": "X"},
         ]
         for payload in payloads:
             response = client.post("/auth/register", json=payload)
@@ -201,6 +259,7 @@ class TestSecurity:
             json={
                 "username": "<script>alert(1)</script>",
                 "password": "password1",
+                "altcha": "X",
             },
         )
         assert response.status_code == 422
@@ -209,11 +268,11 @@ class TestSecurity:
         """任何接口都不应返回密码或哈希值."""
         client.post(
             "/auth/register",
-            json={"username": "secureuser", "password": "password1"},
+            json={"username": "secureuser", "password": "password1", "altcha": altcha_payload()},
         )
         response = client.post(
             "/auth/login",
-            data={"username": "secureuser", "password": "password1"},
+            data={"username": "secureuser", "password": "password1", "altcha": altcha_payload()},
         )
         token = response.json()["access_token"]
         me_response = client.get(
