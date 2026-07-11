@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
-from auth.models import FileRecord, Series, User
+from auth.models import FileRecord, Series, UniqueVisitor, User
 from auth.router import router as auth_router
 from auth.security import require_admin
 from storage import delete_object, r2_enabled
@@ -384,6 +384,10 @@ async def download_file(
     if not record.file_data:
         raise HTTPException(status_code=404, detail="文件内容不存在")
 
+    # 累加下载量（用于数据记录统计）
+    record.download_count = (record.download_count or 0) + 1
+    db.commit()
+
     return Response(
         content=record.file_data,
         media_type=record.file_mime,
@@ -480,11 +484,15 @@ async def admin_diag() -> JSONResponse:
 
 
 @app.post("/api/active-ping")
-async def active_ping(session_id: str = Form(...)) -> JSONResponse:
+async def active_ping(
+    db: Annotated[Session, Depends(get_db)],
+    session_id: str = Form(...),
+) -> JSONResponse:
     """记录一次访问活动心跳，用于统计当前在线访问数（所有访客均可调用）.
 
     前端在打开页面时及之后定时调用本接口，携带一个本机唯一的 session_id。
-    后端仅记录该会话的最近活动时间，不做任何持久化。
+    - 在线统计：仅记录该会话最近活动时间到内存（实时、非累计）。
+    - 累计访问人数：首次出现的 session_id 写入 unique_visitors 表（去重，持久化）。
     """
     sid = (session_id or "").strip()
     if not sid or len(sid) > 64:
@@ -494,6 +502,16 @@ async def active_ping(session_id: str = Form(...)) -> JSONResponse:
         ACTIVE_SESSIONS[sid] = time.time()
     # 控制内存规模：每次心跳顺手清理过期会话
     _prune_active_sessions()
+
+    # 累计独立访客：每个 session_id 仅记录一次
+    try:
+        existing = db.query(UniqueVisitor).filter_by(session_id=sid).first()
+        if not existing:
+            db.add(UniqueVisitor(session_id=sid))
+            db.commit()
+    except Exception:
+        db.rollback()
+
     return JSONResponse({"ok": True})
 
 
@@ -506,6 +524,51 @@ async def admin_active_users(
     统计所有在 ``ACTIVE_WINDOW_SECONDS`` 窗口内仍有心跳的访问会话。
     """
     return JSONResponse({"active_users": _count_active_sessions()})
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员专用：返回数据记录统计.
+
+    包含：
+    - 每个文件的下载量与下载占比
+    - 总下载量
+    - 总访问人数（累计独立访客，去重）
+    - 已注册账号列表（仅用户名与角色，不含密码）
+    """
+    records = db.query(FileRecord).all()
+    total_downloads = sum(r.download_count or 0 for r in records)
+
+    files = []
+    for record in records:
+        display_name = record.original_filename or f"{record.version}{Path(record.filename).suffix}"
+        downloads = record.download_count or 0
+        ratio = (downloads / total_downloads * 100) if total_downloads else 0
+        files.append({
+            "series": record.series,
+            "name": display_name,
+            "downloads": downloads,
+            "ratio": round(ratio, 1),
+        })
+    # 按下载量降序排列，便于阅读
+    files.sort(key=lambda x: x["downloads"], reverse=True)
+
+    total_visitors = db.query(UniqueVisitor).count()
+
+    users = [
+        {"username": u.username, "role": u.role}
+        for u in db.query(User).order_by(User.id).all()
+    ]
+
+    return JSONResponse({
+        "files": files,
+        "total_downloads": total_downloads,
+        "total_visitors": total_visitors,
+        "users": users,
+    })
 
 
 if __name__ == "__main__":

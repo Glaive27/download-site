@@ -18,6 +18,8 @@ const adminPanel = document.getElementById('admin-panel');
 const createSeriesForm = document.getElementById('create-series-form');
 const uploadFileForm = document.getElementById('upload-file-form');
 const uploadSeriesSelect = document.getElementById('upload-series-select');
+const statsModal = document.getElementById('stats-modal');
+const statsClose = document.getElementById('stats-close');
 
 const TOKEN_KEY = 'download_site_token';
 const USER_KEY = 'download_site_user';
@@ -48,6 +50,11 @@ let onlinePollTimer = null;
     modalClose.addEventListener('click', closeAuthModal);
     authModal.addEventListener('click', (e) => {
         if (e.target === authModal) closeAuthModal();
+    });
+
+    statsClose.addEventListener('click', closeStatsModal);
+    statsModal.addEventListener('click', (e) => {
+        if (e.target === statsModal) closeStatsModal();
     });
 
     startActivePing();
@@ -223,6 +230,85 @@ function closeAuthModal() {
     registerForm.reset();
     authMessage.textContent = '';
     authMessage.className = 'auth-message';
+}
+
+/**
+ * 打开数据记录弹窗并加载统计数据
+ */
+function openStatsModal() {
+    statsModal.classList.add('active');
+    fetchStats();
+}
+
+/**
+ * 关闭数据记录弹窗
+ */
+function closeStatsModal() {
+    statsModal.classList.remove('active');
+}
+
+/**
+ * 从后端获取统计数据（管理员专用）
+ */
+async function fetchStats() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+
+    try {
+        const response = await fetch('/api/admin/stats', {
+            headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!response.ok) {
+            throw new Error('获取统计数据失败');
+        }
+        const data = await response.json();
+        renderStats(data);
+    } catch (error) {
+        console.error(error);
+        const box = document.getElementById('stats-files');
+        if (box) box.innerHTML = `<div class="stats-empty">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+/**
+ * 将统计数据渲染到弹窗
+ * @param {object} data - /api/admin/stats 返回的数据
+ */
+function renderStats(data) {
+    document.getElementById('stats-total-downloads').textContent = data.total_downloads;
+    document.getElementById('stats-total-visitors').textContent = data.total_visitors;
+
+    const filesBox = document.getElementById('stats-files');
+    if (!Array.isArray(data.files) || data.files.length === 0) {
+        filesBox.innerHTML = '<div class="stats-empty">暂无文件下载记录</div>';
+    } else {
+        filesBox.innerHTML = data.files.map(file => `
+            <div class="stats-file-row">
+                <div class="stats-file-head">
+                    <span class="stats-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                    <span class="stats-file-series">${escapeHtml(file.series)}</span>
+                    <span class="stats-file-count">${file.downloads} 次</span>
+                </div>
+                <div class="stats-bar">
+                    <span class="stats-bar-fill" style="width:${file.ratio}%"></span>
+                </div>
+                <span class="stats-file-ratio">占比 ${file.ratio}%</span>
+            </div>
+        `).join('');
+    }
+
+    const userBox = document.getElementById('stats-users');
+    document.getElementById('stats-user-count').textContent = data.users.length;
+    if (!Array.isArray(data.users) || data.users.length === 0) {
+        userBox.innerHTML = '<li class="stats-empty">暂无注册账号</li>';
+    } else {
+        userBox.innerHTML = data.users.map(u => `
+            <li class="stats-user-row">
+                <span class="stats-user-name">${escapeHtml(u.username)}</span>
+                <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
+            </li>
+        `).join('');
+    }
 }
 
 /**
@@ -468,8 +554,10 @@ function updateAuthUI() {
                 <span class="user-name">${escapeHtml(user.username)}</span>
                 <span class="user-role ${escapeHtml(user.role)}">${escapeHtml(user.role === 'admin' ? '管理员' : '用户')}</span>
             </div>
+            <button class="btn btn-secondary" id="stats-btn">数据记录</button>
             <button class="btn btn-primary" id="logout-btn">退出</button>
         `;
+        document.getElementById('stats-btn').addEventListener('click', openStatsModal);
         document.getElementById('logout-btn').addEventListener('click', logout);
     } else {
         headerAuth.innerHTML = `<button class="btn btn-primary" id="auth-btn">登录 / 注册</button>`;

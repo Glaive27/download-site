@@ -69,7 +69,25 @@ class FileRecord(Base):  # noqa: D101
     object_key = Column(String(512), nullable=False, index=True)
     file_data = Column(LargeBinary, nullable=True)
     file_mime = Column(String(100), nullable=True)
+    download_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<FileRecord(id={self.id}, series={self.series}, filename={self.filename})>"
+
+
+class UniqueVisitor(Base):  # noqa: D101
+    """独立访客累计表.
+
+    每个本机唯一的 session_id 仅记录一次（首次访问时写入），
+    用于统计「总访问人数」（累计去重，与实时在线数区分）。
+    """
+
+    __tablename__ = "unique_visitors"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(64), unique=True, index=True, nullable=False)
+    first_seen = Column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:  # noqa: D105
+        return f"<UniqueVisitor(id={self.id}, session_id={self.session_id})>"

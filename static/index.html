@@ -99,6 +99,39 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="stats-modal">
+        <div class="modal glass-card stats-modal" role="dialog" aria-modal="true" aria-labelledby="stats-title">
+            <button class="modal-close" id="stats-close" aria-label="关闭">&times;</button>
+            <h2 class="stats-title" id="stats-title">数据记录</h2>
+
+            <section class="stats-section">
+                <h3 class="stats-section-title">总览</h3>
+                <div class="stats-overview">
+                    <div class="stats-stat">
+                        <span class="stats-stat-value" id="stats-total-downloads">0</span>
+                        <span class="stats-stat-label">总下载量</span>
+                    </div>
+                    <div class="stats-stat">
+                        <span class="stats-stat-value" id="stats-total-visitors">0</span>
+                        <span class="stats-stat-label">总访问人数</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="stats-section">
+                <h3 class="stats-section-title">文件下载统计</h3>
+                <div class="stats-files" id="stats-files">
+                    <div class="stats-empty">加载中…</div>
+                </div>
+            </section>
+
+            <section class="stats-section">
+                <h3 class="stats-section-title">注册账号（<span id="stats-user-count">0</span>）</h3>
+                <ul class="stats-users" id="stats-users"></ul>
+            </section>
+        </div>
+    </div>
+
     <script src="/static/glass.js"></script>
     <script src="/static/app.js"></script>
 </body>
