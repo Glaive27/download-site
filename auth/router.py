@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, status
@@ -98,6 +98,11 @@ def login(
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 记录上线时间并清除此前的不活跃高危标记（用户已回归，恢复为正常账号）
+    user.last_login = datetime.now(timezone.utc)
+    user.high_risk = False
+    db.commit()
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(

@@ -28,6 +28,13 @@ class User(Base):  # noqa: D101
     # behavior_flagged —— 是否因行为异常被要求二次验证 / 限制操作
     behavior_risk = Column(Float, nullable=True, default=0.0)
     behavior_flagged = Column(Boolean, nullable=False, default=False)
+    # 不活跃账号自动管理：
+    # last_login    —— 最近一次成功登录时间（注册时取注册时间）；用于判定「上线」间隔
+    # download_count —— 该账号累计下载文件次数（0 表示从未下载过文件）
+    # high_risk     —— 高危标记：注册后从未下载、且超过 ACCOUNT_RISK_DAYS 天未上线时被置位
+    last_login = Column(DateTime, default=_utcnow, nullable=False)
+    download_count = Column(Integer, default=0, nullable=True)
+    high_risk = Column(Boolean, default=False, nullable=False)
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<User(id={self.id}, username={self.username}, role={self.role})>"

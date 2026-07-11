@@ -39,6 +39,14 @@ services:
       # ALTCHA 人机验证（Proof-of-Work CAPTCHA）HMAC 密钥
       - key: ALTCHA_HMAC_KEY
         generateValue: true
+      # 不活跃账号自动管理（仅针对注册后从未下载文件的普通账号，管理员豁免）
+      # 超过 ACCOUNT_RISK_DAYS 天未上线 → 标记高危；超过 ACCOUNT_DELETE_DAYS 天 → 注销
+      - key: ACCOUNT_RISK_DAYS
+        value: "5"
+      - key: ACCOUNT_DELETE_DAYS
+        value: "10"
+      - key: ACCOUNT_SWEEP_INTERVAL_SECONDS
+        value: "3600"
 
 databases:
   - name: download-site-db

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from auth.altcha import ALTCHA_HMAC_KEY
 from auth.models import User, FileRecord, DownloadLog
 from auth.security import get_password_hash, verify_password
+from main import sweep_inactive_accounts
 
 
 def altcha_payload() -> str:
@@ -828,3 +829,116 @@ class TestDownloadRequiresAuth:
         db_session.refresh(normal_user)
         rec = db_session.query(FileRecord).filter_by(filename="s1_v1.zip").first()
         assert rec.download_count == 1
+
+
+class TestInactiveAccountSweep:
+    """不活跃账号自动管理（≥5 天未上线标记高危，≥10 天未上线注销）."""
+
+    def _make_user(self, db_session: Session, username: str, days_ago: int,
+                   download_count: int = 0, role: str = "user",
+                   high_risk: bool = False) -> User:
+        """创建测试用户，并令其 last_login 回溯到 days_ago 天前."""
+        u = User(
+            username=username,
+            hashed_password=get_password_hash("x"),
+            role=role,
+            download_count=download_count,
+            high_risk=high_risk,
+            last_login=datetime.now(timezone.utc) - timedelta(days=days_ago),
+        )
+        db_session.add(u)
+        db_session.commit()
+        db_session.refresh(u)
+        return u
+
+    def test_sweep_marks_high_risk_after_5_days(self, db_session: Session):
+        """注册后从未下载、超过 5 天未上线 → 标记高危但不注销."""
+        self._make_user(db_session, "stale5", days_ago=6)
+        result = sweep_inactive_accounts(db=db_session)
+        assert result["flagged"] == 1
+        assert result["deleted"] == 0
+        u = db_session.query(User).filter_by(username="stale5").first()
+        assert u is not None
+        assert u.high_risk is True
+
+    def test_sweep_deletes_after_10_days(self, db_session: Session):
+        """注册后从未下载、超过 10 天未上线 → 直接注销."""
+        self._make_user(db_session, "stale10", days_ago=11)
+        result = sweep_inactive_accounts(db=db_session)
+        assert result["deleted"] == 1
+        assert result["flagged"] == 0
+        assert db_session.query(User).filter_by(username="stale10").first() is None
+
+    def test_sweep_ignores_downloaded_users(self, db_session: Session):
+        """曾下载过文件的账号，即使长期不活跃也不处理."""
+        self._make_user(db_session, "downloaded", days_ago=20, download_count=2)
+        result = sweep_inactive_accounts(db=db_session)
+        assert result["deleted"] == 0
+        assert result["flagged"] == 0
+        u = db_session.query(User).filter_by(username="downloaded").first()
+        assert u is not None
+        assert u.high_risk is False
+
+    def test_sweep_ignores_admins(self, db_session: Session):
+        """管理员账号豁免（即使从未下载且长期不活跃）."""
+        self._make_user(db_session, "adminstale", days_ago=20, role="admin")
+        result = sweep_inactive_accounts(db=db_session)
+        assert result["deleted"] == 0
+        assert result["flagged"] == 0
+        assert db_session.query(User).filter_by(username="adminstale").first() is not None
+
+    def test_sweep_leaves_recent_users(self, db_session: Session):
+        """未达 5 天的账号既不被标记也不被注销."""
+        self._make_user(db_session, "fresh", days_ago=3)
+        result = sweep_inactive_accounts(db=db_session)
+        assert result["deleted"] == 0
+        assert result["flagged"] == 0
+        u = db_session.query(User).filter_by(username="fresh").first()
+        assert u.high_risk is False
+
+    def test_login_updates_last_login_and_clears_risk(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ):
+        """登录应刷新 last_login 并清除此前的高危标记."""
+        u = self._make_user(db_session, "risky", days_ago=8, high_risk=True)
+        before = u.last_login
+        resp = client.post(
+            "/auth/login",
+            data={"username": "risky", "password": "x", "altcha": altcha_payload()},
+        )
+        assert resp.status_code == 200
+        db_session.refresh(u)
+        assert u.high_risk is False
+        assert u.last_login > before
+
+    def test_download_increments_user_download_count(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ):
+        """已登录用户下载文件后，其 download_count 累加到 1（豁免自动注销）."""
+        from auth.models import FileRecord
+        u = self._make_user(db_session, "dluser", days_ago=8)
+        rec = FileRecord(
+            series="s1", filename="s1_v1.zip", original_filename="实例.zip",
+            version="v1", size=10, mime_type="application/zip",
+            object_key="s1/s1_v1.zip", file_data=b"data", file_mime="application/zip",
+        )
+        db_session.add(rec)
+        db_session.commit()
+        # 该用户密码为 "x"，需单独登录取令牌（_token 助手默认密码不适用）
+        login_resp = client.post(
+            "/auth/login",
+            data={"username": "dluser", "password": "x", "altcha": altcha_payload()},
+        )
+        assert login_resp.status_code == 200
+        token = login_resp.json()["access_token"]
+        resp = client.get(
+            "/download/s1_v1.zip",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        db_session.refresh(u)
+        assert u.download_count == 1

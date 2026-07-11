@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import threading
@@ -39,22 +40,115 @@ from storage import delete_object, r2_enabled
 # 行为式人机认证：风险分达到该阈值即标记该用户需二次验证 / 限制操作
 BEHAVIOR_RISK_THRESHOLD = 0.6
 
+# 不活跃账号自动管理（仅针对「注册后从未下载文件」的普通账号，管理员豁免）：
+# - 超过 ACCOUNT_RISK_DAYS 天未上线  → 标记为高危账号（high_risk=True）
+# - 超过 ACCOUNT_DELETE_DAYS 天未上线 → 直接注销账号
+# 均可通过环境变量覆盖，方便按运营需要调整（单位：天）。
+ACCOUNT_RISK_DAYS = int(os.environ.get("ACCOUNT_RISK_DAYS", "5"))
+ACCOUNT_DELETE_DAYS = int(os.environ.get("ACCOUNT_DELETE_DAYS", "10"))
+# 后台清理任务的扫描间隔（秒），默认 1 小时扫描一次
+ACCOUNT_SWEEP_INTERVAL_SECONDS = int(os.environ.get("ACCOUNT_SWEEP_INTERVAL_SECONDS", "3600"))
+
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期事件：启动时初始化数据库与管理员账号."""
+    """应用生命周期事件：启动时初始化数据库与管理员账号，并启动不活跃账号清理任务."""
     from init_db import init_database
 
     Base.metadata.create_all(bind=engine)
     init_database()
-    yield
+
+    # 启动后台任务：周期性扫描并清理长期不活跃且从未下载的账号
+    sweep_task = asyncio.create_task(_inactivity_sweep_loop())
+    try:
+        yield
+    finally:
+        sweep_task.cancel()
+        try:
+            await sweep_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="文件下载中心", lifespan=lifespan)
 app.include_router(auth_router)
+
+
+async def _inactivity_sweep_loop() -> None:
+    """后台循环：每隔 ACCOUNT_SWEEP_INTERVAL_SECONDS 秒执行一次不活跃账号清理.
+
+    用 ``asyncio.to_thread`` 在 worker 线程中运行同步的 DB 扫描，避免阻塞事件循环。
+    任务在应用关闭时由 lifespan 取消。
+    """
+    while True:
+        await asyncio.sleep(ACCOUNT_SWEEP_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(sweep_inactive_accounts)
+        except Exception:  # noqa: BLE001
+            logger.exception("不活跃账号清理任务执行出错（已忽略，下次重试）")
+
+
+def sweep_inactive_accounts(db: Session | None = None) -> dict:
+    """扫描并清理长期不活跃且从未下载文件的普通账号.
+
+    规则（仅作用于 role=='user' 且 download_count==0 的账号，管理员豁免）：
+    - 距 ``last_login`` 超过 ``ACCOUNT_DELETE_DAYS`` 天 → 直接注销
+    - 距 ``last_login`` 超过 ``ACCOUNT_RISK_DAYS`` 天 → 标记为高危账号
+
+    :param db: 可选会话；不传入时内部新建并关闭一个全局会话（供测试注入使用）。
+    返回本次处理的统计信息（deleted / flagged 数量）。
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    risk_cutoff = now - timedelta(days=ACCOUNT_RISK_DAYS)
+    delete_cutoff = now - timedelta(days=ACCOUNT_DELETE_DAYS)
+
+    deleted = 0
+    flagged = 0
+
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+    try:
+        # 从未下载过文件的普通账号（download_count 为 0 或历史缺失为 NULL）
+        candidates = (
+            db.query(User)
+            .filter(
+                User.role != "admin",
+                (User.download_count == 0) | (User.download_count.is_(None)),
+            )
+            .all()
+        )
+        for user in candidates:
+            last = user.last_login or now
+            # 数据库读回的 DateTime 可能为 naive（SQLite/PG 无时区列），统一转 naive UTC 比较
+            if last.tzinfo is not None:
+                last = last.replace(tzinfo=None)
+            if last <= delete_cutoff:
+                # 超期未上线：直接注销（先清理其下载日志，避免外键残留）
+                db.query(DownloadLog).filter(DownloadLog.user_id == user.id).delete()
+                db.delete(user)
+                deleted += 1
+            elif last <= risk_cutoff and not user.high_risk:
+                user.high_risk = True
+                flagged += 1
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("扫描不活跃账号时出错，已回滚")
+        raise
+    finally:
+        if own_session:
+            db.close()
+
+    if deleted or flagged:
+        logger.info(
+            "不活跃账号清理完成：注销 %d 个，标记高危 %d 个", deleted, flagged,
+        )
+    return {"deleted": deleted, "flagged": flagged}
+
 
 
 @app.exception_handler(Exception)
@@ -506,6 +600,8 @@ async def download_file(
 
     # 累加下载量（用于数据记录统计）
     record.download_count = (record.download_count or 0) + 1
+    # 累计该账号的下载次数（>0 即视为「已下载过」，豁免于不活跃自动注销）
+    current_user.download_count = (current_user.download_count or 0) + 1
     db.commit()
 
     # 兼容 PostgreSQL BYTEA 读回的 memoryview，统一转为 bytes 避免 500
@@ -749,7 +845,13 @@ async def admin_stats(
     total_visitors = db.query(UniqueVisitor).count()
 
     users = [
-        {"username": u.username, "role": u.role}
+        {
+            "username": u.username,
+            "role": u.role,
+            "high_risk": bool(u.high_risk),
+            "download_count": u.download_count or 0,
+            "last_login": u.last_login.isoformat() if u.last_login else None,
+        }
         for u in db.query(User).order_by(User.id).all()
     ]
 
