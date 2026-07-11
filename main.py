@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 # 加载 .env 环境变量
 load_dotenv()
@@ -488,6 +489,23 @@ async def admin_diag() -> JSONResponse:
         "secret_key_configured": secret_configured,
         "reset_endpoint_available": bool(os.environ.get("ADMIN_INIT_TOKEN")),
     })
+
+
+@app.get("/api/health")
+async def health_check() -> JSONResponse:
+    """健康检查端点：用于探测服务是否就绪（使页面打开时即可预热后端）.
+
+    免费实例在闲置后会休眠，首个请求需等待冷启动（容器启动 + 初始化）。
+    前端在页面打开时先请求本端点，让冷启动的等待发生在页面加载阶段，
+    而不是用户点击登录之后，从而改善登录体感速度。
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return JSONResponse({"status": "ok", "database": db_ok})
 
 
 @app.post("/api/active-ping")

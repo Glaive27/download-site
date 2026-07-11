@@ -208,6 +208,12 @@ body {
     box-shadow: 0 0 16px rgba(34, 211, 238, 0.4);
 }
 
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .btn-danger {
     background-color: transparent;
     color: var(--danger);
@@ -467,6 +473,41 @@ body {
     0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); }
     70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
     100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+/* 连接中横幅（冷启动预热提示） */
+.conn-banner {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 45;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    font-size: 0.84rem;
+    color: var(--text);
+    background-color: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+    user-select: none;
+}
+
+.conn-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: conn-spin 0.8s linear infinite;
+}
+
+@keyframes conn-spin {
+    to { transform: rotate(360deg); }
 }
 
 .modal-overlay {
