@@ -28,18 +28,65 @@ if not logger.handlers:
     logger.propagate = False
 
 
+def _auto_migrate() -> None:
+    """自动迁移：为已有表添加新增列（PostgreSQL / SQLite 兼容）.
+
+    SQLAlchemy 的 create_all 只创建不存在的表，不会给已有表添加新列。
+    此函数在启动时检查并补全缺失的列，避免手动执行 SQL 迁移脚本。
+    """
+    from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+
+    try:
+        inspector = _sa_inspect(engine)
+        existing_columns = {col["name"] for col in inspector.get_columns("file_records")}
+    except Exception:
+        # 表可能还不存在，跳过迁移
+        return
+
+    migrations = [
+        ("original_filename", "VARCHAR(255)"),
+        ("file_data", "BYTEA" if "postgres" in str(engine.url.dialect).lower() else "BLOB"),
+        ("file_mime", "VARCHAR(100)"),
+    ]
+
+    db = SessionLocal()
+    for column_name, column_type in migrations:
+        if column_name not in existing_columns:
+            try:
+                dialect = str(engine.url.dialect).lower()
+                if "postgres" in dialect:
+                    db.execute(_sa_text(
+                        f'ALTER TABLE file_records ADD COLUMN IF NOT EXISTS "{column_name}" {column_type}'
+                    ))
+                else:
+                    # SQLite 不支持 IF NOT EXISTS + ADD COLUMN，用 try/except 容错
+                    db.execute(_sa_text(
+                        f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}"
+                    ))
+                db.commit()
+                logger.info("✓ 自动迁移: file_records 表已添加 %s 列", column_name)
+            except Exception:
+                db.rollback()
+                logger.warning("⚠ 自动迁移 %s 列失败（可能已存在），忽略", column_name)
+    db.close()
+
+
 def init_database() -> None:
     """初始化数据库并管理管理员账号.
 
     - 若管理员不存在: 创建管理员（密码来自 ADMIN_PASSWORD 环境变量，默认 19866179818）
     - 若管理员已存在: 跳过创建
     - 若 RESET_ADMIN_PASSWORD=1: 重置管理员密码为 ADMIN_PASSWORD 的当前值
+    - 自动迁移: 检测并添加缺失的数据库列（如 original_filename）
     """
     try:
         Base.metadata.create_all(bind=engine)
     except Exception:
         logger.error("创建数据表失败:\n%s", traceback.format_exc())
         raise
+
+    # 自动迁移：为已有表添加新增字段（create_all 不会给已有表加新列）
+    _auto_migrate()
 
     admin_username = os.environ.get("ADMIN_USERNAME", "Glaive").strip() or "Glaive"
     admin_password = os.environ.get("ADMIN_PASSWORD", "19866179818")
