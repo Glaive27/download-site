@@ -80,6 +80,67 @@ def get_database_size_bytes(session: Session) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# IP 地理位置解析（用于管理员查看用户登录来源）
+# ---------------------------------------------------------------------------
+import json as _json
+from urllib.request import urlopen, Request as _UrlReq
+from urllib.error import URLError
+
+_IP_GEO_CACHE: dict[str, str] = {}   # IP → "国家·城市" 缓存，避免重复请求
+_IP_GEO_CACHE_TTL = 3600             # 缓存有效期（秒）
+
+
+def _get_client_ip(request: Request) -> str | None:
+    """从请求中提取客户端真实 IP（兼容反向代理 / Render）."""
+    # 优先取 X-Forwarded-For（代理链中的第一个真实 IP）
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    # 回退到直接连接的远程地址
+    return request.client.host if request.client else None
+
+
+def _resolve_ip_location(ip: str) -> str:
+    """解析 IP 地址为地理位置字符串（如"中国·广东·广州"）。
+
+    使用免费接口 ip-api.com（中文模式），结果缓存 1 小时。
+    解析失败时返回空字符串（不影响主流程）。
+    """
+    if not ip or ip in ("127.0.0.1", "::1", "localhost"):
+        return "本地"
+
+    cached = _IP_GEO_CACHE.get(ip)
+    if cached:
+        return cached
+
+    try:
+        req = _UrlReq(f"http://ip-api.com/json/{ip}?lang=zh-CN", headers={"User-Agent": "download-site/1.0"})
+        with urlopen(req, timeout=3) as resp:
+            data = _json.loads(resp.read())
+        if data.get("status") == "success":
+            parts = [data.get("country", ""), data.get("regionName", ""), data.get("city", "")]
+            # 过滤掉空值和重复值（如 country==regionName 时去重）
+            parts = [p for p in parts if p]
+            location = "·".join(dict.fromkeys(parts))   # 去重保序
+        else:
+            location = ""
+    except (URLError, OSError, ValueError, KeyError):
+        logger.warning("IP 地理位置 %s 解析失败", ip)
+        location = ""
+
+    if location:
+        _IP_GEO_CACHE[ip] = location
+    return location
+
+
+def _record_user_ip(user: User, request: Request, db: Session) -> None:
+    """在注册或登录时记录用户的 IP 和地理位置."""
+    ip = _get_client_ip(request)
+    user.last_login_ip = ip
+    user.last_login_location = _resolve_ip_location(ip) if ip else None
+    db.commit()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -880,6 +941,7 @@ async def admin_stats(
             "high_risk": bool(u.high_risk),
             "download_count": u.download_count or 0,
             "last_login": u.last_login.isoformat() if u.last_login else None,
+            "ip_location": u.last_login_location or "",
         }
         for u in db.query(User).order_by(User.id).all()
     ]

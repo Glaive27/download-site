@@ -1445,6 +1445,7 @@ function renderStats(data) {
                     <span class="stats-user-name">${escapeHtml(u.username)}</span>
                     <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
                     ${u.high_risk ? '<span class="stats-user-risk" title="长期未上线且从未下载，已被标记为高危账号">高危</span>' : ''}
+                    ${u.ip_location ? `<span class="stats-user-loc" title="最近登录 IP 地理位置">📍 ${escapeHtml(u.ip_location)}</span>` : ''}
                 </span>
                 <button class="btn btn-danger btn-sm stats-user-del" data-user="${escapeHtml(u.username)}">删除</button>
             </li>

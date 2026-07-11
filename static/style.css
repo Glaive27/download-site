@@ -1359,6 +1359,15 @@ body {
     font-weight: 600;
 }
 
+.stats-user-loc {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: rgba(34, 211, 238, 0.12);
+    color: var(--accent);
+    white-space: nowrap;
+}
+
 .stats-empty {
     font-size: 0.85rem;
     color: var(--muted);

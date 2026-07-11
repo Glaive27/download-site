@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -35,7 +35,11 @@ BOT_SCORE_THRESHOLD = 0.7
     response_model=UserRegisterResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
+def register(
+    user_in: UserCreate,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
     """用户注册接口."""
     # 校验 ALTCHA 人机验证（Proof-of-Work）
     verify_altcha(user_in.altcha)
@@ -65,6 +69,10 @@ def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
     db.commit()
     db.refresh(new_user)
 
+    # 记录注册 IP 与地理位置（管理员可见）
+    from main import _record_user_ip
+    _record_user_ip(new_user, request, db)
+
     return {
         "id": new_user.id,
         "username": new_user.username,
@@ -77,6 +85,7 @@ def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
 def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     altcha: Annotated[str, Form()],
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     bot_score: Annotated[float, Form()] = 0.0,
 ):
@@ -102,6 +111,11 @@ def login(
     # 记录上线时间并清除此前的不活跃高危标记（用户已回归，恢复为正常账号）
     user.last_login = datetime.now(timezone.utc)
     user.high_risk = False
+
+    # 记录登录 IP 与地理位置（管理员可见）
+    from main import _record_user_ip
+    _record_user_ip(user, request, db)
+
     db.commit()
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
