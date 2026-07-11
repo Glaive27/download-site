@@ -568,3 +568,125 @@ class TestBehaviorAuth:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 400
+
+
+class TestAntiAutomation:
+    """反自动化检测：客户端环境指纹 bot_score 服务端硬拦截."""
+
+    def test_login_blocked_by_high_bot_score(self, client: TestClient, normal_user: User):
+        """高 bot_score（明显自动化环境）登录应被 403 拦截."""
+        resp = client.post(
+            "/auth/login",
+            data={
+                "username": "testuser",
+                "password": "testpass123",
+                "altcha": altcha_payload(),
+                "bot_score": "0.9",
+            },
+        )
+        assert resp.status_code == 403
+        assert "自动化" in resp.json()["detail"]
+
+    def test_login_allows_low_bot_score(self, client: TestClient, normal_user: User):
+        """低 bot_score（正常浏览器环境）登录应放行."""
+        resp = client.post(
+            "/auth/login",
+            data={
+                "username": "testuser",
+                "password": "testpass123",
+                "altcha": altcha_payload(),
+                "bot_score": "0.1",
+            },
+        )
+        assert resp.status_code == 200
+
+    def test_register_blocked_by_high_bot_score(self, client: TestClient):
+        """高 bot_score 注册应被 403 拦截."""
+        resp = client.post(
+            "/auth/register",
+            json={
+                "username": "newuser",
+                "password": "secure123",
+                "altcha": altcha_payload(),
+                "bot_score": 0.8,
+            },
+        )
+        assert resp.status_code == 403
+
+    def test_register_allows_default_bot_score(self, client: TestClient):
+        """不传 bot_score（默认 0）注册应正常."""
+        resp = client.post(
+            "/auth/register",
+            json={"username": "newuser", "password": "secure123", "altcha": altcha_payload()},
+        )
+        assert resp.status_code == 201
+
+
+class TestSessionStatus:
+    """会话状态探针：跨浏览器账号删除同步与实时异常检测."""
+
+    def _token(self, client: TestClient, username: str, password: str) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": username, "password": password, "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_session_status_requires_auth(self, client: TestClient):
+        """未登录访问会话状态应返回 401."""
+        resp = client.get("/api/session/status")
+        assert resp.status_code == 401
+
+    def test_session_status_valid(self, client: TestClient, normal_user: User):
+        """已登录用户会话状态正常返回 valid=true."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.get(
+            "/api/session/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is True
+        assert data["flagged"] is False
+
+    def test_session_status_deleted_user_401(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """账号被管理员删除后，其仍有效的令牌访问会话状态应返回 401（跨浏览器同步）."""
+        token = self._token(client, "testuser", "testpass123")
+        # 删除前会话正常
+        assert client.get(
+            "/api/session/status",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code == 200
+
+        admin_token = self._token(client, "Glaive", "19866179818")
+        client.delete(
+            "/api/admin/users/testuser",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        # 删除后，旧令牌访问会话状态 → 401（前端据此弹出异常提示并登出）
+        resp = client.get(
+            "/api/session/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 401
+
+    def test_session_status_reflects_flag(self, client: TestClient, normal_user: User):
+        """被行为标记的用户，会话状态返回 flagged=true."""
+        token = self._token(client, "testuser", "testpass123")
+        client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.9, "verdict": "suspicious"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp = client.get(
+            "/api/session/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["flagged"] is True

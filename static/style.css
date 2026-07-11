@@ -1129,6 +1129,12 @@ altcha-widget {
     text-align: center;
 }
 
+.behavior-icon {
+    font-size: 2.2rem;
+    line-height: 1;
+    margin-bottom: 10px;
+}
+
 .behavior-title {
     font-size: 1.2rem;
     font-weight: 700;
@@ -1143,10 +1149,28 @@ altcha-widget {
     margin-bottom: 16px;
 }
 
+.behavior-desc strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
 .behavior-card altcha-widget {
     margin: 6px auto 16px;
 }
 
 #behavior-verify {
+    width: 100%;
+}
+
+/* ===== 会话异常（账号失效）弹窗 ===== */
+.anomaly-card {
+    max-width: 400px;
+}
+
+.anomaly-icon {
+    color: var(--danger);
+}
+
+#anomaly-confirm {
     width: 100%;
 }

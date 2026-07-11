@@ -33,6 +33,9 @@ class UserCreate(UserBase):  # noqa: D101
 
     password: str = Field(..., min_length=6, max_length=128)
     altcha: str = Field(..., min_length=1, description="ALTCHA 人机验证 payload")
+    # 客户端环境指纹风险分（0~1）：navigator.webdriver、无头浏览器、自动化框架特征等。
+    # 由前端 BotDetector 计算，用于在登录/注册阶段对明显的自动化环境做硬拦截。
+    bot_score: float = Field(0.0, ge=0.0, le=1.0, description="客户端环境自动化风险分")
 
     @field_validator("password")
     @classmethod

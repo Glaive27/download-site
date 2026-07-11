@@ -429,6 +429,23 @@ async def behavior_reverify(
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/session/status")
+async def session_status(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> JSONResponse:
+    """会话状态探针（已登录用户定期轮询）.
+
+    用于跨浏览器账号状态同步与实时异常推送：
+    - 账号被管理员删除后，``get_current_user`` 因用户不存在而返回 401，
+      前端轮询到 401 即弹出「异常行为检测」提示并强制登出（数秒内生效）。
+    - 正常返回 ``{valid, flagged}``：``flagged`` 表示是否因行为异常需复核。
+    """
+    return JSONResponse({
+        "valid": True,
+        "flagged": bool(current_user.behavior_flagged),
+    })
+
+
 @app.get("/download/{filename}")
 async def download_file(
     filename: str,

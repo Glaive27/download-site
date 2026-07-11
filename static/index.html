@@ -107,11 +107,28 @@
     <div class="modal-overlay" id="behavior-modal">
         <div class="modal glass-card behavior-card" role="dialog" aria-modal="true" aria-labelledby="behavior-title">
             <button class="modal-close" id="behavior-close" aria-label="关闭">&times;</button>
-            <h2 class="behavior-title" id="behavior-title">安全验证</h2>
-            <p class="behavior-desc">检测到操作行为异常，为确认是本人操作，请完成以下验证后继续。</p>
+            <div class="behavior-icon">🛡️</div>
+            <h2 class="behavior-title" id="behavior-title">行为异常安全验证</h2>
+            <p class="behavior-desc">
+                系统通过分析<strong>鼠标轨迹连续性、交互事件真实性与操作环境特征</strong>，检测到当前会话存在自动化操作特征
+                （如轨迹机械化、缺乏真实人工交互或疑似自动化浏览器环境）。为确认是本人操作，请完成下方验证后继续下载。
+            </p>
             <altcha-widget id="behavior-altcha" challenge="/api/altcha/challenge" name="altcha"></altcha-widget>
             <button class="btn btn-primary" id="behavior-verify">验证并继续</button>
             <p class="auth-message" id="behavior-message"></p>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="session-anomaly-modal">
+        <div class="modal glass-card behavior-card anomaly-card" role="alertdialog" aria-modal="true" aria-labelledby="anomaly-title">
+            <div class="behavior-icon anomaly-icon">⚠️</div>
+            <h2 class="behavior-title" id="anomaly-title">检测到异常行为</h2>
+            <p class="behavior-desc">
+                行为异常分析系统检测到您的账号访问状态已失效。可能的原因包括：
+                <strong>账号被管理员移除</strong>、会话存在异常操作特征或检测到非本人访问。
+                为保障账号安全，您已被自动登出。如有疑问，请联系管理员。
+            </p>
+            <button class="btn btn-primary" id="anomaly-confirm">知道了</button>
         </div>
     </div>
 

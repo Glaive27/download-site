@@ -24,6 +24,11 @@ from auth.security import (
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
+# 客户端环境自动化风险分阈值：达到该值即判定为明显的自动化浏览器环境，直接拦截。
+# 配合登录后的鼠标轨迹行为分析（BehaviorMonitor）形成纵深防御：
+# 明显自动化环境在此拦截，隐蔽自动化（如 CDP 模拟真实事件）由行为分析兜底。
+BOT_SCORE_THRESHOLD = 0.7
+
 
 @router.post(
     "/register",
@@ -34,6 +39,13 @@ def register(user_in: UserCreate, db: Annotated[Session, Depends(get_db)]):
     """用户注册接口."""
     # 校验 ALTCHA 人机验证（Proof-of-Work）
     verify_altcha(user_in.altcha)
+
+    # 自动化环境硬拦截：bot_score 由前端环境指纹计算（webdriver/无头/自动化框架特征）
+    if user_in.bot_score >= BOT_SCORE_THRESHOLD:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="检测到自动化操作环境，请求已被拦截",
+        )
 
     # 检查用户名是否已存在
     existing = db.query(User).filter(User.username == user_in.username).first()
@@ -66,10 +78,18 @@ def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     altcha: Annotated[str, Form()],
     db: Annotated[Session, Depends(get_db)],
+    bot_score: Annotated[float, Form()] = 0.0,
 ):
     """用户登录接口，返回 JWT 访问令牌."""
     # 校验 ALTCHA 人机验证（Proof-of-Work）
     verify_altcha(altcha)
+
+    # 自动化环境硬拦截：AI 浏览器（如 Tabbit）虽能解算 PoW，但其环境指纹会暴露自动化特征
+    if bot_score >= BOT_SCORE_THRESHOLD:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="检测到自动化操作环境，请求已被拦截",
+        )
 
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:

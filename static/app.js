@@ -65,93 +65,226 @@ function getAltchaPayload(formId, key) {
     return input ? input.value : '';
 }
 
+// 客户端行为标记（由 /api/behavior/report 响应同步；复核通过后清除）
+let behaviorFlagged = false;
+
 /**
- * 行为式人机认证（鼠标轨迹分析）
+ * 客户端环境自动化指纹（BotDetector）
  * ------------------------------------------------------------
- * 登录后、在非登录页面持续采集鼠标移动轨迹，提取速度连续性、方向变化自然度、
- * 机械化重复模式等特征，估算操作者为人/机器人的风险分，并定期上报后端。
- * 全程对用户透明：不弹窗、不打断；仅当风险达到阈值（后端标记）时，下一次受保护
+ * 检测 navigator.webdriver、无头浏览器特征、自动化框架注入的全局对象等，返回 0~1
+ * 风险分。在登录/注册阶段随请求上报供服务端硬拦截；并作为行为分析的风险下界。
+ * 关键：AI 浏览器（如 Tabbit/Kimi）虽能解算 ALTCHA PoW，但其自动化驱动环境
+ * （Playwright/Puppeteer 等）通常令 navigator.webdriver=true，可被此处识别。
+ */
+const BotDetector = (function () {
+    let cached = null;
+
+    function compute() {
+        if (cached !== null) return cached;
+        let score = 0;
+        const reasons = [];
+
+        // 1. navigator.webdriver —— 自动化驱动的强信号
+        try {
+            if (navigator.webdriver === true) {
+                score += 0.5;
+                reasons.push('webdriver');
+            }
+        } catch (e) { /* 部分浏览器访问会抛错 */ }
+
+        // 2. 自动化框架注入的全局对象
+        const autoKeys = [
+            '__nightmare', '__puppeteer', '_phantom', 'callPhantom',
+            '__playwright', '__selenium_unwrapped', 'domAutomation',
+            'domAutomationController', 'awesomium',
+        ];
+        for (const k of autoKeys) {
+            if (typeof window !== 'undefined' && k in window) {
+                score += 0.35;
+                reasons.push(k);
+                break;
+            }
+        }
+
+        // 3. 无头浏览器线索：无插件且无语言列表
+        try {
+            const noPlugins = !navigator.plugins || navigator.plugins.length === 0;
+            const noLang = !navigator.languages || navigator.languages.length === 0;
+            if (noPlugins && noLang) {
+                score += 0.2;
+                reasons.push('headless-clue');
+            }
+        } catch (e) { /* ignore */ }
+
+        // 4. Chrome 但缺失 window.chrome.runtime（无头特征）
+        try {
+            if (/Chrome/.test(navigator.userAgent) &&
+                !(window.chrome && window.chrome.runtime)) {
+                score += 0.15;
+                reasons.push('no-chrome-runtime');
+            }
+        } catch (e) { /* ignore */ }
+
+        cached = Math.min(1, round3(score));
+        return cached;
+    }
+
+    return { compute };
+})();
+
+/**
+ * 行为式人机认证（鼠标轨迹 + 交互真实性分析）
+ * ------------------------------------------------------------
+ * 登录后、在非登录页面持续采集鼠标移动轨迹与真实交互事件，提取速度连续性、方向变化
+ * 自然度、机械化重复模式、轨迹真实性（瞬移/直线/定时间隔）、交互事件可信度
+ * （isTrusted 过滤合成事件）、操作环境特征等，估算操作者为人/机器人的风险分，
+ * 并定期上报后端。全程对用户透明：仅当风险达到阈值（后端标记）时，下一次受保护
  * 操作才会触发一次轻量二次验证（ALTCHA）。仅上报聚合特征，绝不发送原始坐标。
+ *
+ * 相较旧版的增强（针对 Tabbit 等 AI 浏览器）：
+ * 1. isTrusted 过滤：JS dispatch 产生的合成事件 isTrusted=false，真人绝不会产生 → 强信号
+ * 2. 交互多样性：跟踪真实 click/keydown/scroll/touch；登录后长时间零交互 → 可疑
+ * 3. 轨迹真实性：瞬移（超人类速度）、近完美直线、定时间隔均判为机器人特征
+ * 4. 修复"无移动=安全"漏洞：旧版样本不足直接返回 risk=0，机器人不移动鼠标即被放过
+ * 5. 融合环境指纹：BotDetector 分作为风险下界
  */
 const BehaviorMonitor = (function () {
     const SAMPLE_INTERVAL = 50;   // 采样间隔（ms）≈ 20Hz，兼顾性能与准确性
     const MAX_SAMPLES = 200;      // 环形缓冲上限（≈10s）
     const REPORT_INTERVAL = 5000; // 风险上报间隔（ms）
-    const MIN_SAMPLES = 20;       // 分析所需最小样本数（样本不足不判定）
-    const MOVE_THRESHOLD = 400;   // 总位移阈值（px），过小视为未移动、不判定
+    const MIN_SAMPLES = 20;       // 轨迹分析所需最小样本数
+    const MOVE_THRESHOLD = 400;   // 总位移阈值（px），过小视为未移动、不判定轨迹
+    const IDLE_FLAG_SECONDS = 12;     // 登录后超过该时长仍无任何真实交互 → 可疑
+    const TELEPORT_SPEED = 15;        // px/ms（≈15000px/s），超过视为瞬移（非人类）
+    const SYNTHETIC_FLAG_THRESHOLD = 5; // 合成事件数超过该值 → 强机器人信号
 
     let samples = [];
     let lastT = 0;
     let active = false;
     let timer = null;
+    let startedAt = 0;
+    let interactionCount = 0;   // 真实（isTrusted）交互事件计数
+    let syntheticCount = 0;     // 合成（isTrusted=false）事件计数
 
     function onMove(e) {
+        // 过滤合成事件：JS dispatch 产生的事件 isTrusted=false，真实人工事件为 true
+        if (e.isTrusted === false) {
+            syntheticCount++;
+            return;
+        }
         const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
         if (now - lastT < SAMPLE_INTERVAL) return;  // 节流
         const x = e.clientX, y = e.clientY;
-        const prev = samples[samples.length - 1];
-        if (!prev || now - prev.t > 0) {
-            samples.push({ x, y, t: now });
-            if (samples.length > MAX_SAMPLES) samples.shift();
-            lastT = now;
+        samples.push({ x, y, t: now });
+        if (samples.length > MAX_SAMPLES) samples.shift();
+        lastT = now;
+    }
+
+    function onInteraction(e) {
+        if (e.isTrusted === false) {
+            syntheticCount++;
+            return;
         }
+        interactionCount++;
     }
 
     function analyze() {
         const n = samples.length;
-        if (n < MIN_SAMPLES) {
-            return { risk_score: 0, verdict: 'human', sample_count: n, features: {} };
+        const envScore = BotDetector.compute();
+        const idleSeconds = active ? (performance.now() - startedAt) / 1000 : 0;
+
+        let risk = 0;
+        const feats = {
+            env_score: envScore,
+            interactions: interactionCount,
+            synthetic: syntheticCount,
+            idle_seconds: round3(idleSeconds),
+        };
+
+        // (A) 合成事件 —— 真人绝不会产生 isTrusted=false 事件
+        if (syntheticCount >= SYNTHETIC_FLAG_THRESHOLD) {
+            risk += 0.7;
+        } else if (syntheticCount > 0) {
+            risk += 0.3;
         }
-        const speeds = [];
-        const dirChanges = [];
-        let totalDist = 0;
-        for (let i = 1; i < n; i++) {
-            const a = samples[i - 1], b = samples[i];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const dt = b.t - a.t;
-            if (dt <= 0) continue;
-            const dist = Math.hypot(dx, dy);
-            totalDist += dist;
-            speeds.push(dist / dt);  // px/ms
-            if (i >= 2) {
-                const t1 = Math.atan2(a.y - samples[i - 2].y, a.x - samples[i - 2].x);
-                const t2 = Math.atan2(dy, dx);
-                let d = t2 - t1;
-                while (d > Math.PI) d -= 2 * Math.PI;
-                while (d < -Math.PI) d += 2 * Math.PI;
-                dirChanges.push(d);
+
+        // (B) 长时间无任何真实交互 —— 纯 API 调用型机器人（不产生鼠标/点击/滚动事件）
+        if (active && idleSeconds > IDLE_FLAG_SECONDS && interactionCount === 0) {
+            risk += 0.6;
+        }
+
+        // (C) 环境指纹 —— 取环境分作为风险下界
+        risk = Math.max(risk, envScore);
+
+        // 轨迹真实性分析（需足够样本）
+        if (n >= MIN_SAMPLES) {
+            const speeds = [];
+            const dts = [];
+            const dirChanges = [];
+            let totalDist = 0;
+            let teleported = false;
+            const sx = samples[0].x, sy = samples[0].y;
+            for (let i = 1; i < n; i++) {
+                const a = samples[i - 1], b = samples[i];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const dt = b.t - a.t;
+                if (dt <= 0) continue;
+                const dist = Math.hypot(dx, dy);
+                totalDist += dist;
+                const sp = dist / dt;  // px/ms
+                speeds.push(sp);
+                dts.push(dt);
+                if (sp > TELEPORT_SPEED) teleported = true;
+                if (i >= 2) {
+                    const t1 = Math.atan2(a.y - samples[i - 2].y, a.x - samples[i - 2].x);
+                    const t2 = Math.atan2(dy, dx);
+                    let d = t2 - t1;
+                    while (d > Math.PI) d -= 2 * Math.PI;
+                    while (d < -Math.PI) d += 2 * Math.PI;
+                    dirChanges.push(d);
+                }
+            }
+            const ex = samples[n - 1].x, ey = samples[n - 1].y;
+            const netDisp = Math.hypot(ex - sx, ey - sy);
+
+            if (speeds.length > 0) {
+                const mean = avg(speeds);
+                const variance = avg(speeds.map(s => (s - mean) * (s - mean)));
+                const cv = mean > 0 ? Math.sqrt(variance) / mean : 0;        // 速度变异系数
+                const speedEntropy = entropy(speeds, 8);                     // 速度分布熵
+                const dirEntropy = entropy(dirChanges, 12);                  // 方向变化熵
+                const periodicity = maxAutocorr(speeds, 6);                   // 速度序列周期性
+                const straightness = totalDist > 0 ? netDisp / totalDist : 0; // 直线度
+                const dtMean = avg(dts);
+                const dtCv = dtMean > 0
+                    ? Math.sqrt(avg(dts.map(d => (d - dtMean) * (d - dtMean)))) / dtMean
+                    : 0;                                                       // 时间间隔变异系数
+
+                const movedEnough = totalDist > MOVE_THRESHOLD;
+
+                if (teleported) risk += 0.6;                                      // 瞬移
+                if (movedEnough && cv < 0.05) risk += 0.45;                       // 机械式匀速
+                if (periodicity > 0.85) risk += 0.4;                              // 机械化重复模式
+                if (movedEnough && dirEntropy < 0.5 && cv < 0.12) risk += 0.25;   // 呆板直线+匀速
+                if (movedEnough && straightness > 0.95 && n > 30) risk += 0.35;   // 近完美直线
+                if (dts.length > 30 && dtCv < 0.1) risk += 0.3;                   // 定时间隔
+
+                feats.cv = round3(cv);
+                feats.speed_entropy = round3(speedEntropy);
+                feats.dir_entropy = round3(dirEntropy);
+                feats.periodicity = round3(periodicity);
+                feats.straightness = round3(straightness);
+                feats.dt_cv = round3(dtCv);
+                feats.total_dist = Math.round(totalDist);
             }
         }
-        if (speeds.length === 0) {
-            return { risk_score: 0, verdict: 'human', sample_count: n, features: {} };
-        }
 
-        const mean = avg(speeds);
-        const variance = avg(speeds.map(s => (s - mean) * (s - mean)));
-        const cv = mean > 0 ? Math.sqrt(variance) / mean : 0;        // 速度变异系数
-        const speedEntropy = entropy(speeds, 8);                     // 速度分布熵
-        const dirEntropy = entropy(dirChanges, 12);                  // 方向变化熵
-        const periodicity = maxAutocorr(speeds, 6);                   // 速度序列周期性
-
-        // 综合风险（保守阈值，避免误伤真人）
-        let risk = 0;
-        const movedEnough = totalDist > MOVE_THRESHOLD;
-        if (movedEnough && cv < 0.05) risk += 0.45;        // 机械式匀速
-        if (periodicity > 0.85) risk += 0.4;              // 机械化重复模式
-        if (movedEnough && dirEntropy < 0.5 && cv < 0.12) risk += 0.25; // 呆板直线+匀速
         risk = Math.min(1, risk);
-
         return {
             risk_score: round3(risk),
             verdict: risk >= 0.6 ? 'suspicious' : 'human',
             sample_count: n,
-            features: {
-                cv: round3(cv),
-                speed_entropy: round3(speedEntropy),
-                dir_entropy: round3(dirEntropy),
-                periodicity: round3(periodicity),
-                total_dist: Math.round(totalDist),
-            },
+            features: feats,
         };
     }
 
@@ -160,7 +293,7 @@ const BehaviorMonitor = (function () {
         const token = localStorage.getItem(TOKEN_KEY);
         if (!token) return;
         try {
-            await fetch('/api/behavior/report', {
+            const res = await fetch('/api/behavior/report', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -168,6 +301,10 @@ const BehaviorMonitor = (function () {
                 },
                 body: JSON.stringify(result),
             });
+            if (res.ok) {
+                const data = await res.json();
+                behaviorFlagged = !!(data && data.flagged);
+            }
         } catch (e) { /* 上报失败不影响使用 */ }
     }
 
@@ -177,7 +314,14 @@ const BehaviorMonitor = (function () {
         active = true;
         samples = [];
         lastT = 0;
+        startedAt = performance.now();
+        interactionCount = 0;
+        syntheticCount = 0;
         window.addEventListener('mousemove', onMove, { passive: true });
+        window.addEventListener('click', onInteraction, { passive: true });
+        window.addEventListener('keydown', onInteraction, { passive: true });
+        window.addEventListener('scroll', onInteraction, { passive: true });
+        window.addEventListener('touchstart', onInteraction, { passive: true });
         timer = setInterval(report, REPORT_INTERVAL);
     }
 
@@ -185,12 +329,16 @@ const BehaviorMonitor = (function () {
         if (!active) return;
         active = false;
         window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('click', onInteraction);
+        window.removeEventListener('keydown', onInteraction);
+        window.removeEventListener('scroll', onInteraction);
+        window.removeEventListener('touchstart', onInteraction);
         if (timer) clearInterval(timer);
         timer = null;
         samples = [];
     }
 
-    return { start, stop };
+    return { start, stop, report };
 })();
 
 /**
@@ -246,6 +394,7 @@ function requestBehaviorReverify() {
                     msg.className = 'auth-message';
                     return;
                 }
+                behaviorFlagged = false;  // 复核通过，清除客户端行为标记
                 finish(true);
             } catch (e) {
                 msg.textContent = '网络错误，请重试';
@@ -266,7 +415,9 @@ function requestBehaviorReverify() {
  */
 (async function init() {
     const token = localStorage.getItem(TOKEN_KEY);
-    if (token && !localStorage.getItem(USER_KEY)) {
+    // 始终向服务端重新校验令牌有效性（而非仅依赖 localStorage 缓存）：
+    // 这样账号被删除/令牌失效后，刷新页面即可同步为登出态（跨浏览器一致）。
+    if (token) {
         await fetchCurrentUser();
     } else {
         updateAuthUI();
@@ -299,6 +450,16 @@ function requestBehaviorReverify() {
     statsModal.addEventListener('click', (e) => {
         if (e.target === statsModal) closeStatsModal();
     });
+
+    // 会话异常弹窗确认 → 强制登出
+    const anomalyConfirm = document.getElementById('anomaly-confirm');
+    if (anomalyConfirm) {
+        anomalyConfirm.addEventListener('click', () => {
+            const am = document.getElementById('session-anomaly-modal');
+            if (am) am.classList.remove('active');
+            logout();
+        });
+    }
     document.getElementById('stats-back').addEventListener('click', showStatsContentView);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
@@ -784,7 +945,12 @@ async function handleLogin(event) {
         const response = await fetch('/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({ username, password, altcha: payload }),
+            body: new URLSearchParams({
+                username,
+                password,
+                altcha: payload,
+                bot_score: String(BotDetector.compute()),
+            }),
         });
 
         if (!response.ok) {
@@ -820,7 +986,12 @@ async function handleRegister(event) {
         const response = await fetch('/auth/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password, altcha: payload }),
+            body: JSON.stringify({
+                username,
+                password,
+                altcha: payload,
+                bot_score: BotDetector.compute(),
+            }),
         });
 
         if (!response.ok) {
@@ -1032,15 +1203,18 @@ function updateAuthUI() {
     const userJson = localStorage.getItem(USER_KEY);
     if (userJson) {
         const user = JSON.parse(userJson);
+        const isAdmin = user.role === 'admin';
         headerAuth.innerHTML = `
             <div class="user-info">
                 <span class="user-name">${escapeHtml(user.username)}</span>
-                <span class="user-role ${escapeHtml(user.role)}">${escapeHtml(user.role === 'admin' ? '管理员' : '用户')}</span>
+                <span class="user-role ${escapeHtml(user.role)}">${escapeHtml(isAdmin ? '管理员' : '用户')}</span>
             </div>
-            <button class="btn btn-secondary" id="stats-btn">数据记录</button>
+            ${isAdmin ? '<button class="btn btn-secondary" id="stats-btn">数据记录</button>' : ''}
             <button class="btn btn-primary" id="logout-btn">退出</button>
         `;
-        document.getElementById('stats-btn').addEventListener('click', openStatsModal);
+        // 「数据记录」为管理员专属，普通用户不渲染、不绑定
+        const statsBtn = document.getElementById('stats-btn');
+        if (statsBtn) statsBtn.addEventListener('click', openStatsModal);
         document.getElementById('logout-btn').addEventListener('click', logout);
     } else {
         headerAuth.innerHTML = `<button class="btn btn-primary" id="auth-btn">登录 / 注册</button>`;
@@ -1053,8 +1227,11 @@ function updateAuthUI() {
     // 行为式人机认证：登录后开始采集轨迹，登出后停止
     if (userJson) {
         BehaviorMonitor.start();
+        // 启动会话状态轮询：实时感知账号被删除/撤销（数秒内弹出异常提示）
+        startSessionStatusPoll();
     } else {
         BehaviorMonitor.stop();
+        stopSessionStatusPoll();
     }
 }
 
@@ -1142,6 +1319,78 @@ function updateOnlineBadge() {
             onlinePollTimer = null;
         }
     }
+}
+
+/**
+ * 会话状态轮询：已登录用户定期向服务端确认账号仍有效。
+ * - 账号被管理员删除后，/api/session/status 返回 401（get_current_user 找不到用户）。
+ *   若此时 JWT 尚未过期 → 判定为账号被移除/撤销，弹出「异常行为检测」提示并登出。
+ * - 正常返回时同步 behaviorFlagged 状态。
+ */
+const SESSION_STATUS_INTERVAL = 5000;  // 每 5 秒探一次（数秒内感知账号失效）
+let sessionStatusTimer = null;
+
+/**
+ * 解析 JWT 判断令牌是否仍在有效期内（不验签，仅读 exp）。
+ * 用于区分 401 的成因：令牌未过期却被拒 → 账号被删/撤销；令牌已过期 → 自然失效。
+ */
+function tokenIsUnexpired() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return false;
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return false;
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (!payload.exp) return true;
+        return payload.exp * 1000 > Date.now();
+    } catch (e) {
+        return false;
+    }
+}
+
+async function pollSessionStatus() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+    try {
+        const res = await fetch('/api/session/status', {
+            headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (res.status === 401) {
+            stopSessionStatusPoll();
+            if (tokenIsUnexpired()) {
+                // 令牌未过期却被拒 → 账号被删除/撤销，弹出异常行为检测提示
+                showSessionAnomaly();
+            } else {
+                // 令牌自然过期 → 静默登出
+                logout();
+            }
+            return;
+        }
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.flagged) behaviorFlagged = true;
+        }
+    } catch (e) { /* 网络错误忽略，下次重试 */ }
+}
+
+function startSessionStatusPoll() {
+    stopSessionStatusPoll();
+    pollSessionStatus();
+    sessionStatusTimer = setInterval(pollSessionStatus, SESSION_STATUS_INTERVAL);
+}
+
+function stopSessionStatusPoll() {
+    if (sessionStatusTimer) clearInterval(sessionStatusTimer);
+    sessionStatusTimer = null;
+}
+
+/**
+ * 显示会话异常（账号失效）弹窗并停止行为采集
+ */
+function showSessionAnomaly() {
+    const modal = document.getElementById('session-anomaly-modal');
+    if (modal) modal.classList.add('active');
+    BehaviorMonitor.stop();
 }
 
 /**
