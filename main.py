@@ -29,7 +29,7 @@ load_dotenv()
 from auth.database import Base, SessionLocal, engine, get_db
 from auth.models import FileRecord, Series, UniqueVisitor, User
 from auth.router import router as auth_router
-from auth.security import require_admin
+from auth.security import get_current_user, require_admin
 from storage import delete_object, r2_enabled
 
 
@@ -617,6 +617,25 @@ async def delete_user(
     db.delete(target)
     db.commit()
     return JSONResponse({"message": f"用户 {username} 已删除"})
+
+
+@app.delete("/api/account")
+async def delete_my_account(
+    auth_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """当前登录用户注销自己的账号（仅普通用户，管理员豁免）.
+
+    用于人机验证机制在判定为机器人后的自动注销：彻底删除该用户记录，
+    清除其全部账号信息。管理员账号不受此机制约束，调用本接口返回 403。
+    """
+    if auth_user.role == "admin":
+        raise HTTPException(status_code=403, detail="管理员账号不可注销")
+
+    username = auth_user.username
+    db.delete(auth_user)
+    db.commit()
+    return JSONResponse({"message": f"账号 {username} 已注销，全部信息已清除"})
 
 
 if __name__ == "__main__":

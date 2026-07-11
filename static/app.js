@@ -624,6 +624,7 @@ function updateAuthUI() {
 
     updateAdminPanel();
     updateOnlineBadge();
+    BotGuard.sync();   // 登录态变化时同步人机验证监控（非管理员启动，管理员/登出停止）
 }
 
 /**
@@ -787,3 +788,213 @@ function escapeHtml(text) {
     div.textContent = String(text);
     return div.innerHTML;
 }
+
+/* ===================== 人机验证（反机器人）机制 ===================== */
+/*
+ * 检测方式：前端行为分析
+ *   - 采集用户交互事件：mousemove / click / scroll / keydown / touchstart
+ *   - 若 navigator.webdriver === true（无头浏览器 / 自动化框架）直接判定为机器人
+ *   - 若在采样窗口内没有任何交互事件，判定为机器人（脚本 / 挂机 / 无操作）
+ *   - 否则判定为正常人类
+ * 管理员账号豁免：不监控、不弹窗、不注销。
+ *
+ * 状态机：
+ *   idle --(首次检测为机器人)--> warn1(阻断10s) --自动关闭--> monitor(监控10s)
+ *   monitor --(仍判定为机器人)--> warn2(阻断5s) --自动--> 自动注销(清除全部信息)
+ *   monitor --(人类)--> idle(周期复检) ; warn1期间人类无法操作（弹窗阻断）
+ *
+ * 各阶段时间参数集中可配置（见 BOT_GUARD_CONFIG），修改即生效。
+ */
+const BOT_GUARD_CONFIG = {
+    firstDetectMs: 10000,   // 首次检测前的采样窗口：登录后先采集交互，再判定
+    firstWarnMs: 10000,     // 首次警告弹窗显示时长，结束后进入持续监控
+    monitorMs: 10000,       // 冷却后持续监控时长，结束后再次判定
+    secondWarnMs: 5000,     // 二次违规弹窗显示时长，结束后自动注销
+    checkIntervalMs: 10000, // 正常状态下周期性复检间隔
+};
+
+const BotGuard = (() => {
+    let active = false;
+    let state = 'idle';        // idle | warn1 | monitor | warn2
+    let events = [];           // 交互事件采样（存时间戳）
+    let timers = [];           // setTimeout 句柄集合
+    let countdownTimer = null; // 弹窗倒计时句柄
+    let overlay = null;        // 当前阻断弹窗 DOM
+
+    const EVENT_TYPES = ['mousemove', 'click', 'scroll', 'keydown', 'touchstart'];
+
+    function clearTimers() {
+        timers.forEach(clearTimeout);
+        timers = [];
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    }
+
+    function schedule(fn, ms) {
+        const id = setTimeout(fn, ms);
+        timers.push(id);
+        return id;
+    }
+
+    function onInteract() {
+        if (!active) return;
+        events.push(Date.now());
+        if (events.length > 1000) events.shift();
+    }
+
+    function bindListeners() {
+        EVENT_TYPES.forEach(ev =>
+            window.addEventListener(ev, onInteract, { passive: true }));
+    }
+
+    function unbindListeners() {
+        EVENT_TYPES.forEach(ev =>
+            window.removeEventListener(ev, onInteract));
+    }
+
+    function isBot() {
+        // 无头 / 自动化环境（如 Puppeteer、Playwright 无头模式）
+        if (navigator.webdriver === true) return true;
+        // 采样窗口内无任何交互 -> 判定为机器人 / 挂机 / 无操作
+        return events.length === 0;
+    }
+
+    function resetEvents() { events = []; }
+
+    /* ---- 阻断式弹窗（覆盖全屏，倒计时结束前阻断操作）---- */
+    function showBlockModal(title, bodyHtml, totalMs, onCountdownEnd) {
+        closeBlockModal();
+        overlay = document.createElement('div');
+        overlay.className = 'botguard-overlay';
+        overlay.innerHTML = `
+            <div class="botguard-card">
+                <div class="botguard-icon">⚠️</div>
+                <h2 class="botguard-title">${title}</h2>
+                <div class="botguard-body">${bodyHtml}</div>
+                <div class="botguard-count" id="botguard-count">${Math.ceil(totalMs / 1000)}</div>
+                <div class="botguard-bar"><div class="botguard-bar-fill" id="botguard-bar"></div></div>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        const bar = overlay.querySelector('#botguard-bar');
+        const count = overlay.querySelector('#botguard-count');
+        const start = Date.now();
+        countdownTimer = setInterval(() => {
+            const remain = Math.max(0, totalMs - (Date.now() - start));
+            count.textContent = Math.ceil(remain / 1000);
+            bar.style.width = (remain / totalMs * 100) + '%';
+            if (remain <= 0) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+                onCountdownEnd();
+            }
+        }, 100);
+    }
+
+    function closeBlockModal() {
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        overlay = null;
+    }
+
+    /* ---- 状态流转 ---- */
+    function startMonitorLoop() {
+        state = 'idle';
+        resetEvents();
+        schedule(() => {
+            if (isBot()) enterWarn1();
+            else startMonitorLoop();
+        }, BOT_GUARD_CONFIG.checkIntervalMs);
+    }
+
+    function enterWarn1() {
+        state = 'warn1';
+        showBlockModal(
+            '疑似机器人行为',
+            '系统检测到当前会话可能存在自动化或无操作行为。<br>本警告 <b>10 秒</b> 后自动关闭，随后将进行持续监控。',
+            BOT_GUARD_CONFIG.firstWarnMs,
+            () => {
+                closeBlockModal();
+                enterMonitor();
+            }
+        );
+    }
+
+    function enterMonitor() {
+        state = 'monitor';
+        resetEvents();
+        schedule(() => {
+            if (isBot()) enterWarn2();
+            else startMonitorLoop();
+        }, BOT_GUARD_CONFIG.monitorMs);
+    }
+
+    function enterWarn2() {
+        state = 'warn2';
+        showBlockModal(
+            '账号将被自动注销',
+            '系统再次检测到疑似机器人行为。<br>出于安全考虑，<b>5 秒后您的账号将被自动注销，所有信息将被清除且不可恢复</b>。',
+            BOT_GUARD_CONFIG.secondWarnMs,
+            () => {
+                closeBlockModal();
+                performAutoLogout();
+            }
+        );
+    }
+
+    async function performAutoLogout() {
+        const token = localStorage.getItem(TOKEN_KEY);
+        // 尽力通知后端注销账号（清除服务器侧全部信息）
+        if (token) {
+            try {
+                await fetch('/api/account', {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+            } catch (e) {
+                // 忽略网络错误，前端仍执行本地注销
+            }
+        }
+        stop();
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        localStorage.removeItem(SESSION_KEY);
+        updateAuthUI();
+        refreshFiles();
+        showToast('账号因疑似机器人行为已被自动注销，全部信息已清除', true);
+    }
+
+    /* ---- 启停 ---- */
+    function start() {
+        if (active) return;
+        if (currentUserIsAdmin()) return;   // 管理员豁免
+        active = true;
+        state = 'idle';
+        resetEvents();
+        bindListeners();
+        // 首次检测：先采样 firstDetectMs，再判定
+        schedule(() => {
+            if (isBot()) enterWarn1();
+            else startMonitorLoop();
+        }, BOT_GUARD_CONFIG.firstDetectMs);
+    }
+
+    function stop() {
+        active = false;
+        state = 'idle';
+        clearTimers();
+        closeBlockModal();
+        unbindListeners();
+    }
+
+    // 登录态变化时同步：登录且非管理员 -> 启动；否则停止
+    function sync() {
+        const userJson = localStorage.getItem(USER_KEY);
+        if (userJson && !currentUserIsAdmin() && !active) {
+            start();
+        } else if ((!userJson || currentUserIsAdmin()) && active) {
+            stop();
+        }
+    }
+
+    return { start, stop, sync };
+})();

@@ -931,3 +931,72 @@ body {
     color: var(--muted);
     padding: 8px 0;
 }
+
+/* ============ 人机验证（反机器人）阻断弹窗 ============ */
+.botguard-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(2, 2, 5, 0.82);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.botguard-card {
+    width: min(440px, 90vw);
+    padding: 28px 26px 30px;
+    border-radius: 16px;
+    text-align: center;
+    background-color: var(--card-bg);
+    border: 1px solid var(--danger);
+    box-shadow: 0 0 40px rgba(248, 113, 113, 0.35);
+    animation: botguard-pop 0.25s ease;
+}
+
+@keyframes botguard-pop {
+    from { transform: scale(0.92); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+.botguard-icon {
+    font-size: 2.4rem;
+    line-height: 1;
+}
+
+.botguard-title {
+    margin: 12px 0 12px;
+    font-size: 1.25rem;
+    color: var(--danger);
+}
+
+.botguard-body {
+    font-size: 0.92rem;
+    color: var(--muted);
+    line-height: 1.65;
+    margin-bottom: 20px;
+}
+
+.botguard-count {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 14px;
+    font-variant-numeric: tabular-nums;
+}
+
+.botguard-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.botguard-bar-fill {
+    height: 100%;
+    width: 100%;
+    background: var(--danger);
+    transition: width 0.1s linear;
+}
