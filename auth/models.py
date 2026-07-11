@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, LargeBinary, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String
 
 from auth.database import Base
 
@@ -91,3 +91,37 @@ class UniqueVisitor(Base):  # noqa: D101
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<UniqueVisitor(id={self.id}, session_id={self.session_id})>"
+
+
+class DownloadLog(Base):  # noqa: D101
+    """用户下载行为日志表.
+
+    每次「已登录用户」成功下载一个文件都会写入一行，用于统计每个账号的
+    历史下载记录（下载过哪些文件、何时下载）。与 file_records.download_count
+    （全站聚合下载量）解耦：本表只记录「谁下载了什么」，不重复累加总量。
+
+    字段说明：
+    - user_id:        下载者（users.id 外键，级联删除）
+    - file_record_id: 被下载的文件（file_records.id 外键，级联删除）
+    - downloaded_at:  下载发生时间（UTC）
+    """
+
+    __tablename__ = "download_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    file_record_id = Column(
+        Integer,
+        ForeignKey("file_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    downloaded_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:  # noqa: D105
+        return f"<DownloadLog(id={self.id}, user_id={self.user_id}, file_record_id={self.file_record_id})>"

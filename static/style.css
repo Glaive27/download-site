@@ -763,12 +763,195 @@ body {
     text-align: left;
 }
 
+.stats-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding-right: 36px;
+}
+
 .stats-title {
     font-size: 1.25rem;
     font-weight: 700;
     color: var(--text);
-    margin-bottom: 18px;
-    padding-right: 24px;
+    margin-bottom: 0;
+    padding-right: 0;
+}
+
+.stats-back-btn {
+    flex-shrink: 0;
+    background-color: transparent;
+    color: var(--accent);
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    white-space: nowrap;
+}
+
+.stats-back-btn:hover {
+    border-color: var(--accent);
+    background-color: rgba(34, 211, 238, 0.12);
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
+}
+
+/* ===== 账号历史下载面板 ===== */
+.stats-history {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.stats-history-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background-color: rgba(34, 211, 238, 0.08);
+    border: 1px solid var(--card-border);
+}
+
+.stats-history-user {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.stats-history-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stats-history-sub {
+    font-size: 0.78rem;
+    color: var(--muted);
+}
+
+.stats-history-ratio {
+    flex-shrink: 0;
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.stats-history-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.stats-history-count {
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+.stats-sort-btn {
+    background-color: transparent;
+    color: var(--accent);
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+}
+
+.stats-sort-btn:hover {
+    border-color: var(--accent);
+    background-color: rgba(34, 211, 238, 0.12);
+}
+
+.stats-history-table-wrap {
+    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    overflow: hidden;
+    max-height: 48vh;
+    overflow-y: auto;
+}
+
+.stats-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.stats-history-table thead th {
+    position: sticky;
+    top: 0;
+    background-color: rgba(15, 23, 42, 0.96);
+    color: var(--muted);
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+
+.stats-history-table tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    vertical-align: top;
+}
+
+.stats-history-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.stats-history-table tbody tr:hover td {
+    background-color: rgba(34, 211, 238, 0.06);
+}
+
+.stats-history-table .col-name {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stats-history-table .col-series {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.stats-history-table .col-time {
+    color: var(--muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 账号名可点击（查看历史下载记录） */
+.stats-user-info {
+    cursor: pointer;
+    border-radius: 8px;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    transition: background-color 0.2s ease;
+}
+
+.stats-user-info:hover {
+    background-color: rgba(34, 211, 238, 0.12);
+}
+
+.stats-user-info:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 .stats-section {

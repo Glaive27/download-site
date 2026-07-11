@@ -14,7 +14,7 @@ import sys
 import traceback
 
 from auth.database import Base, SessionLocal, engine
-from auth.models import FileRecord, User
+from auth.models import DownloadLog, FileRecord, User
 from auth.security import get_password_hash
 
 logger = logging.getLogger("init_db")

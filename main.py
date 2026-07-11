@@ -28,7 +28,7 @@ from sqlalchemy import text
 load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
-from auth.models import FileRecord, Series, UniqueVisitor, User
+from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
 from auth.altcha import ALTCHA_HMAC_KEY
@@ -406,6 +406,30 @@ async def download_file(
     )
 
 
+@app.post("/api/download-log/{filename}")
+async def log_download(
+    filename: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """记录一次「已登录用户」的下载行为（用于账号历史下载统计）.
+
+    前端在用户点击下载按钮时，会随原生下载（GET /download）一并异步发起本请求，
+    仅用于归属统计，不重复累加 file_records.download_count（总量由 GET /download 处理）。
+    匿名下载不会调用本接口，因此账号历史仅反映登录后的下载行为。
+    """
+    if not _is_safe_filename(filename):
+        raise HTTPException(status_code=400, detail="非法文件名")
+
+    record = db.query(FileRecord).filter(FileRecord.filename == filename).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    db.add(DownloadLog(user_id=current_user.id, file_record_id=record.id))
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/admin/reset-password")
 async def reset_admin_password(
     token: str,
@@ -617,6 +641,62 @@ async def admin_stats(
     })
 
 
+@app.get("/api/admin/users/{username}/downloads")
+async def user_download_history(
+    username: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    order: str = "desc",
+) -> JSONResponse:
+    """管理员专用：返回指定账号的历史下载记录.
+
+    返回内容：
+    - username / total_files（站点文件总数）/ downloaded_files（该用户下载过的不同文件数）
+    - ratio：下载文件比例 = 已下载文件数 / 站点总文件数 * 100（百分比，保留 1 位小数）
+    - history：按下载时间排序的下载事件列表（file_name / series / downloaded_at）
+    """
+    username = username.strip()
+    target = db.query(User).filter(User.username == username).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    total_files = db.query(FileRecord).count()
+
+    sort_col = DownloadLog.downloaded_at
+    logs = (
+        db.query(DownloadLog, FileRecord)
+        .join(FileRecord, DownloadLog.file_record_id == FileRecord.id)
+        .filter(DownloadLog.user_id == target.id)
+        .order_by(sort_col.asc() if order == "asc" else sort_col.desc())
+        .all()
+    )
+
+    history = []
+    distinct_files = set()
+    for log, record in logs:
+        distinct_files.add(record.id)
+        display_name = (
+            record.original_filename
+            or f"{record.version}{Path(record.filename).suffix}"
+        )
+        history.append({
+            "file_name": display_name,
+            "series": record.series,
+            "downloaded_at": log.downloaded_at.isoformat(),
+        })
+
+    downloaded_files = len(distinct_files)
+    ratio = round(downloaded_files / total_files * 100, 1) if total_files else 0
+
+    return JSONResponse({
+        "username": target.username,
+        "total_files": total_files,
+        "downloaded_files": downloaded_files,
+        "ratio": ratio,
+        "history": history,
+    })
+
+
 @app.delete("/api/admin/users/{username}")
 async def delete_user(
     username: str,
@@ -635,6 +715,8 @@ async def delete_user(
     if not target:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # 清理该用户的下载日志（SQLite 默认不强制外键级联，故显式删除以保证两端一致）
+    db.query(DownloadLog).filter(DownloadLog.user_id == target.id).delete()
     db.delete(target)
     db.commit()
     return JSONResponse({"message": f"用户 {username} 已删除"})
@@ -654,6 +736,8 @@ async def delete_my_account(
         raise HTTPException(status_code=403, detail="管理员账号不可注销")
 
     username = auth_user.username
+    # 清理该用户的下载日志
+    db.query(DownloadLog).filter(DownloadLog.user_id == auth_user.id).delete()
     db.delete(auth_user)
     db.commit()
     return JSONResponse({"message": f"账号 {username} 已注销，全部信息已清除"})

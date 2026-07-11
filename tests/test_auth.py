@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timezone, timedelta
 
 import pytest
 from altcha import create_challenge_v1, solve_challenge_v1
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from auth.altcha import ALTCHA_HMAC_KEY
-from auth.models import User
+from auth.models import User, FileRecord, DownloadLog
 from auth.security import get_password_hash, verify_password
 
 
@@ -282,3 +283,173 @@ class TestSecurity:
         data = me_response.json()
         assert "password" not in data
         assert "hashed_password" not in data
+
+
+class TestDownloadHistory:
+    """账号历史下载记录（归属统计）功能测试."""
+
+    def _make_file(self, db_session: Session, filename: str, series: str, original: str | None = None) -> FileRecord:
+        """在测试库中直接插入一条文件记录（避免依赖文件上传/存储服务）."""
+        rec = FileRecord(
+            series=series,
+            filename=filename,
+            original_filename=original,
+            version="v1",
+            size=10,
+            mime_type="application/zip",
+            object_key=f"{series}/{filename}",
+            file_data=b"data",
+            file_mime="application/zip",
+        )
+        db_session.add(rec)
+        db_session.commit()
+        db_session.refresh(rec)
+        return rec
+
+    def _token(self, client: TestClient, username: str, password: str) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": username, "password": password, "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_log_download_creates_entry(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+    ):
+        """登录用户下载后，POST /api/download-log 写入归属记录."""
+        self._make_file(db_session, "s1_v1.zip", "s1", "实例.zip")
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/download-log/s1_v1.zip",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert db_session.query(DownloadLog).filter_by(user_id=normal_user.id).count() == 1
+
+    def test_log_download_requires_auth(self, client: TestClient, db_session: Session):
+        """未登录调用下载归属接口应返回 401."""
+        self._make_file(db_session, "s1_v1.zip", "s1")
+        resp = client.post("/api/download-log/s1_v1.zip")
+        assert resp.status_code == 401
+
+    def test_log_download_missing_file(self, client: TestClient, normal_user: User):
+        """下载不存在的文件，归属接口应返回 404."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/download-log/nope.zip",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_history_requires_admin(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """普通用户不能查看他人下载历史（403）；管理员可以（200）."""
+        token = self._token(client, "testuser", "testpass123")
+        forbidden = client.get(
+            "/api/admin/users/testuser/downloads",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert forbidden.status_code == 403
+
+        admin = self._token(client, "Glaive", "19866179818")
+        ok = client.get(
+            "/api/admin/users/testuser/downloads",
+            headers={"Authorization": f"Bearer {admin}"},
+        )
+        assert ok.status_code == 200
+
+    def test_history_content_and_ratio(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """历史记录含文件名、时间、下载比例；同文件多次下载去重计数."""
+        self._make_file(db_session, "s1_v1.zip", "s1", "实例.zip")
+        self._make_file(db_session, "s2_v1.zip", "s2", "资料.zip")
+        token = self._token(client, "testuser", "testpass123")
+
+        # 同一文件下载两次
+        for _ in range(2):
+            r = client.post(
+                "/api/download-log/s1_v1.zip",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert r.status_code == 200
+
+        admin_token = self._token(client, "Glaive", "19866179818")
+        resp = client.get(
+            "/api/admin/users/testuser/downloads?order=desc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["username"] == "testuser"
+        assert data["total_files"] == 2
+        assert data["downloaded_files"] == 1  # 去重：只下载了 1 个不同文件
+        assert data["ratio"] == 50.0          # 1 / 2 * 100
+        assert len(data["history"]) == 2      # 两次下载事件均记录
+        assert data["history"][0]["file_name"] == "实例.zip"
+
+    def test_history_sorting(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """按下载时间排序：order=desc 最新在前，order=asc 最早在前."""
+        f1 = self._make_file(db_session, "s1_v1.zip", "s1", "A.zip")
+        f2 = self._make_file(db_session, "s2_v1.zip", "s2", "B.zip")
+        db_session.add_all([
+            DownloadLog(user_id=normal_user.id, file_record_id=f1.id,
+                        downloaded_at=datetime(2026, 1, 1, tzinfo=timezone.utc)),
+            DownloadLog(user_id=normal_user.id, file_record_id=f2.id,
+                        downloaded_at=datetime(2026, 6, 1, tzinfo=timezone.utc)),
+        ])
+        db_session.commit()
+
+        admin_token = self._token(client, "Glaive", "19866179818")
+        desc = client.get(
+            "/api/admin/users/testuser/downloads?order=desc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        ).json()
+        assert desc["history"][0]["file_name"] == "B.zip"
+        asc = client.get(
+            "/api/admin/users/testuser/downloads?order=asc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        ).json()
+        assert asc["history"][0]["file_name"] == "A.zip"
+
+    def test_delete_user_cleans_logs(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """删除用户时，其下载日志应一并清理."""
+        self._make_file(db_session, "s1_v1.zip", "s1", "实例.zip")
+        token = self._token(client, "testuser", "testpass123")
+        client.post(
+            "/api/download-log/s1_v1.zip",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert db_session.query(DownloadLog).filter_by(user_id=normal_user.id).count() == 1
+
+        admin_token = self._token(client, "Glaive", "19866179818")
+        resp = client.delete(
+            "/api/admin/users/testuser",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code == 200
+        assert db_session.query(DownloadLog).filter_by(user_id=normal_user.id).count() == 0

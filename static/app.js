@@ -103,6 +103,8 @@ function getAltchaPayload(formId, key) {
     statsModal.addEventListener('click', (e) => {
         if (e.target === statsModal) closeStatsModal();
     });
+    document.getElementById('stats-back').addEventListener('click', showStatsContentView);
+    document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
     startActivePing();
 
@@ -182,7 +184,7 @@ function renderFiles(files) {
                             <span class="file-size">${escapeHtml(file.size)}</span>
                         </div>
                         <div class="file-actions">
-                            <a class="download-btn" href="/download/${encodeURIComponent(file.name)}" download>
+                            <a class="download-btn" href="/download/${encodeURIComponent(file.name)}" download data-filename="${escapeHtml(file.name)}">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     <path d="M12 16l-5-5h3V4h4v7h3l-5 5zm-6 2h12v2H6v-2z"/>
                                 </svg>
@@ -203,6 +205,7 @@ function renderFiles(files) {
     if (isAdmin) {
         bindAdminFileActions();
     }
+    bindDownloadTracking();
 }
 
 /**
@@ -223,6 +226,26 @@ function bindAdminFileActions() {
             const series = btn.dataset.series;
             if (!confirm(`确定要删除整个系列 ${series} 及其所有文件吗？`)) return;
             await deleteSeries(series);
+        });
+    });
+}
+
+/**
+ * 绑定文件下载按钮：登录用户点击下载时，异步上报一次下载行为（用于账号历史统计）。
+ * 上报为 fire-and-forget，不阻塞原生文件下载（GET /download 仍负责实际传输与总量统计）。
+ * 匿名用户不调用本接口，因此账号历史仅记录登录后的下载。
+ */
+function bindDownloadTracking() {
+    document.querySelectorAll('.download-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const token = localStorage.getItem(TOKEN_KEY);
+            if (!token) return;  // 匿名：直接走原生下载，不上报
+            const filename = btn.dataset.filename;
+            if (!filename) return;
+            fetch(`/api/download-log/${encodeURIComponent(filename)}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+            }).catch(() => { /* 统计失败不影响下载 */ });
         });
     });
 }
@@ -302,6 +325,7 @@ function closeAuthModal() {
  * 打开数据记录弹窗并加载统计数据
  */
 function openStatsModal() {
+    showStatsContentView();  // 每次打开都重置到总览视图
     statsModal.classList.add('active');
     fetchStats();
 }
@@ -311,6 +335,7 @@ function openStatsModal() {
  */
 function closeStatsModal() {
     statsModal.classList.remove('active');
+    showStatsContentView();  // 关闭后复位，避免下次打开停留在历史视图
 }
 
 /**
@@ -370,13 +395,25 @@ function renderStats(data) {
     } else {
         userBox.innerHTML = data.users.map(u => `
             <li class="stats-user-row" data-username="${escapeHtml(u.username)}">
-                <span class="stats-user-info">
+                <span class="stats-user-info" role="button" tabindex="0" title="查看下载记录">
                     <span class="stats-user-name">${escapeHtml(u.username)}</span>
                     <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
                 </span>
                 <button class="btn btn-danger btn-sm stats-user-del" data-user="${escapeHtml(u.username)}">删除</button>
             </li>
         `).join('');
+
+        // 绑定账号名点击 → 查看该用户的历史下载记录
+        userBox.querySelectorAll('.stats-user-info').forEach(el => {
+            const uname = el.closest('.stats-user-row').dataset.username;
+            el.addEventListener('click', () => openUserHistory(uname));
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openUserHistory(uname);
+                }
+            });
+        });
 
         // 绑定删除按钮事件
         userBox.querySelectorAll('.stats-user-del').forEach(btn => {
@@ -401,6 +438,124 @@ function renderStats(data) {
             });
         });
     }
+}
+
+/**
+ * 视图切换：切换到历史记录面板 / 回到总览
+ */
+function showStatsHistoryView() {
+    document.getElementById('stats-content').classList.add('hidden');
+    document.getElementById('stats-history').classList.remove('hidden');
+    document.getElementById('stats-back').classList.remove('hidden');
+}
+
+function showStatsContentView() {
+    document.getElementById('stats-history').classList.add('hidden');
+    document.getElementById('stats-content').classList.remove('hidden');
+    document.getElementById('stats-back').classList.add('hidden');
+}
+
+/**
+ * 打开指定账号的历史下载记录面板
+ * @param {string} username
+ */
+let currentHistoryUser = '';
+let historyOrder = 'desc';
+
+async function openUserHistory(username) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+
+    currentHistoryUser = username;
+    showStatsHistoryView();
+    setHistoryLoading();
+
+    try {
+        const res = await fetch(
+            `/api/admin/users/${encodeURIComponent(username)}/downloads?order=${historyOrder}`,
+            { headers: { 'Authorization': `Bearer ${token}` } },
+        );
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '获取下载记录失败' }));
+            throw new Error(err.detail || '获取下载记录失败');
+        }
+        const data = await res.json();
+        renderUserHistory(data);
+    } catch (error) {
+        document.getElementById('stats-history-body').innerHTML =
+            `<tr><td colspan="3" class="stats-empty">${escapeHtml(error.message)}</td></tr>`;
+        document.getElementById('stats-history-empty').classList.add('hidden');
+    }
+}
+
+/**
+ * 历史面板加载中占位
+ */
+function setHistoryLoading() {
+    document.getElementById('stats-history-name').textContent = currentHistoryUser;
+    document.getElementById('stats-history-sub').textContent = '';
+    document.getElementById('stats-history-ratio').textContent = '';
+    document.getElementById('stats-history-count').textContent = '加载中…';
+    document.getElementById('stats-history-body').innerHTML =
+        '<tr><td colspan="3" class="stats-empty">加载中…</td></tr>';
+    document.getElementById('stats-history-empty').classList.add('hidden');
+}
+
+/**
+ * 将某账号的历史下载记录渲染到面板
+ * @param {object} data - /api/admin/users/{username}/downloads 返回
+ */
+function renderUserHistory(data) {
+    document.getElementById('stats-history-name').textContent = data.username;
+    document.getElementById('stats-history-sub').textContent =
+        `已下载 ${data.downloaded_files} / 共 ${data.total_files} 个文件`;
+    document.getElementById('stats-history-ratio').textContent = `下载比例 ${data.ratio}%`;
+
+    const body = document.getElementById('stats-history-body');
+    const emptyEl = document.getElementById('stats-history-empty');
+    const countEl = document.getElementById('stats-history-count');
+
+    if (!Array.isArray(data.history) || data.history.length === 0) {
+        body.innerHTML = '';
+        emptyEl.classList.remove('hidden');
+        countEl.textContent = '';
+        return;
+    }
+
+    emptyEl.classList.add('hidden');
+    countEl.textContent = `共 ${data.history.length} 条记录`;
+    body.innerHTML = data.history.map(item => `
+        <tr>
+            <td class="col-name" title="${escapeHtml(item.file_name)}">${escapeHtml(item.file_name)}</td>
+            <td class="col-series">${escapeHtml(item.series)}</td>
+            <td class="col-time">${escapeHtml(formatDateTime(item.downloaded_at))}</td>
+        </tr>
+    `).join('');
+
+    // 排序按钮文案
+    const sortBtn = document.getElementById('stats-history-sort');
+    sortBtn.textContent = historyOrder === 'desc' ? '按时间 ↓ 最新优先' : '按时间 ↑ 最早优先';
+}
+
+/**
+ * 格式化 ISO 时间为本地可读字符串
+ * @param {string} iso
+ * @returns {string}
+ */
+function formatDateTime(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * 切换历史记录排序（最新/最早），并重新拉取
+ */
+function toggleHistorySort() {
+    historyOrder = historyOrder === 'desc' ? 'asc' : 'desc';
+    if (currentHistoryUser) openUserHistory(currentHistoryUser);
 }
 
 /**
