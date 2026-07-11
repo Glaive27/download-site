@@ -20,7 +20,8 @@ from auth.schemas import Token
 # JWT 配置：优先从环境变量读取，否则随机生成（每次重启会失效旧 Token）
 SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# 令牌有效期：默认 8 小时，避免管理员在测试中频繁过期导致在线数显示异常
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")

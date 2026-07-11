@@ -529,6 +529,12 @@ async function refreshOnlineCount() {
         const response = await fetch('/api/admin/active-users', {
             headers: { 'Authorization': `Bearer ${token}` },
         });
+        if (response.status === 401) {
+            // 令牌已过期：重新校验会话；若确实失效会自动登出并收起徽标，
+            // 避免一直显示误导性的「0」
+            fetchCurrentUser();
+            return;
+        }
         if (!response.ok) return;
         const data = await response.json();
         const countEl = document.getElementById('online-count');
