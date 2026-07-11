@@ -476,6 +476,63 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* ===== 鼠标轨迹人机验证实时徽标（自动后台检测） ===== */
+.traj-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid var(--card-border);
+    background-color: var(--card-bg);
+    color: var(--muted);
+    white-space: nowrap;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.traj-live.hidden {
+    display: none;
+}
+
+.traj-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+}
+
+.traj-live.collecting {
+    color: var(--accent);
+    border-color: rgba(34, 211, 238, 0.5);
+}
+
+.traj-live.collecting .traj-live-dot {
+    background: var(--accent);
+    animation: toast-spin 1s linear infinite;
+}
+
+.traj-live.human {
+    color: #4ade80;
+    border-color: rgba(34, 197, 94, 0.6);
+}
+
+.traj-live.human .traj-live-dot {
+    background: #4ade80;
+}
+
+.traj-live.bot {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.6);
+}
+
+.traj-live.bot .traj-live-dot {
+    background: #f87171;
+}
+
 .loading,
 .empty {
     text-align: center;

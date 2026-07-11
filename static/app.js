@@ -373,6 +373,17 @@ const MouseTrajectoryVerifier = (function () {
     let finalized = false;
     let pendingResult = null;
 
+    // ---- 自动后台检测模式：登录后于网站内持续采集鼠标轨迹并判定，无需按钮触发 ----
+    let autoActive = false;
+    let autoPoints = [];
+    let autoLastT = 0;
+    let autoTimer = null;
+    let autoState = 'collecting';   // collecting | human | bot
+    let autoStable = 0;
+    let autoLastConf = -1;
+    let autoBadge = null;
+    let autoBadgeText = null;
+
     function initDom() {
         canvas = document.getElementById('traj-canvas');
         if (canvas) ctx = canvas.getContext('2d');
@@ -432,13 +443,13 @@ const MouseTrajectoryVerifier = (function () {
         return out;
     }
 
-    function computeFeatures() {
-        const n = points.length;
+    function computeFeatures(pts) {
+        const n = pts.length;
         if (n < 2) return null;
         const speeds = [], dts = [], dirChanges = [];
         let totalDist = 0, teleported = false;
         for (let i = 1; i < n; i++) {
-            const a = points[i - 1], b = points[i];
+            const a = pts[i - 1], b = pts[i];
             const dx = b.x - a.x, dy = b.y - a.y;
             const dt = b.t - a.t;
             if (dt <= 0) continue;
@@ -449,7 +460,7 @@ const MouseTrajectoryVerifier = (function () {
             dts.push(dt);
             if (sp > TELEPORT_SPEED) teleported = true;
             if (i >= 2) {
-                const t1 = Math.atan2(a.y - points[i - 2].y, a.x - points[i - 2].x);
+                const t1 = Math.atan2(a.y - pts[i - 2].y, a.x - pts[i - 2].x);
                 const t2 = Math.atan2(dy, dx);
                 let d = t2 - t1;
                 while (d > Math.PI) d -= 2 * Math.PI;
@@ -468,18 +479,18 @@ const MouseTrajectoryVerifier = (function () {
             if (s !== 0) lastSign = s;
         }
         // 自然抖动：相对移动平均轨迹的高频残差
-        const smoothed = movingAverage(points, 4);
+        const smoothed = movingAverage(pts, 4);
         let jitterSum = 0, jitterCnt = 0;
         for (let i = 2; i < n - 2; i++) {
-            jitterSum += Math.hypot(points[i].x - smoothed[i].x, points[i].y - smoothed[i].y);
+            jitterSum += Math.hypot(pts[i].x - smoothed[i].x, pts[i].y - smoothed[i].y);
             jitterCnt++;
         }
         const jitterMean = jitterCnt ? jitterSum / jitterCnt : 0;
         const meanStep = totalDist / Math.max(1, n - 1);
         const jitterRatio = meanStep > 0 ? jitterMean / meanStep : 0;
 
-        const sx = points[0].x, sy = points[0].y;
-        const ex = points[n - 1].x, ey = points[n - 1].y;
+        const sx = pts[0].x, sy = pts[0].y;
+        const ex = pts[n - 1].x, ey = pts[n - 1].y;
         const netDisp = Math.hypot(ex - sx, ey - sy);
         const straightness = totalDist > 0 ? netDisp / totalDist : 0;
 
@@ -554,7 +565,7 @@ const MouseTrajectoryVerifier = (function () {
     function tick() {
         if (!active) return;
         draw();
-        const f = computeFeatures();
+        const f = computeFeatures(points);
         const conf = f ? humanConfidence(f) : 0;
         const pct = Math.round(conf * 100);
         if (gaugeFill) {
@@ -686,7 +697,126 @@ const MouseTrajectoryVerifier = (function () {
         if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) cancel(); }, { once: true });
     }
 
-    return { open, close: cleanup };
+    // ===== 自动后台检测模式（登录后启用，全程无需按钮） =====
+    function initBadge() {
+        autoBadge = document.getElementById('traj-live');
+        autoBadgeText = document.getElementById('traj-live-text');
+    }
+
+    function updateBadge(state, text) {
+        if (!autoBadge || !autoBadgeText) return;
+        autoBadge.className = 'traj-live ' + state;
+        autoBadgeText.textContent = text;
+    }
+
+    function autoOnMove(e) {
+        if (!autoActive) return;
+        if (e.isTrusted === false) return;  // 过滤自动化脚本注入的合成事件
+        const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
+        if (now - autoLastT < SAMPLE_MIN_INTERVAL) return;  // 节流 ≈ 30Hz
+        autoPoints.push({ x: e.clientX, y: e.clientY, t: now });
+        if (autoPoints.length > MAX_POINTS) autoPoints.shift();
+        autoLastT = now;
+    }
+
+    async function enterHuman(f, conf) {
+        autoState = 'human';
+        autoStable = 0;
+        updateBadge('human', '✅ 已验证真人');
+        if (behaviorFlagged) {
+            // 已被标记则自动清除（前端判定为真人即通过二次验证）
+            try {
+                const res = await fetch('/api/behavior/reverify_trajectory', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                    },
+                    body: JSON.stringify({ verdict: 'human', confidence: conf, samples: f.n, features: f }),
+                });
+                if (res.ok) behaviorFlagged = false;
+            } catch (e) { /* 网络异常不影响前台判定 */ }
+        }
+    }
+
+    async function enterBot(f, conf) {
+        autoState = 'bot';
+        autoStable = 0;
+        updateBadge('bot', '🤖 疑似自动化脚本');
+        behaviorFlagged = true;  // 标记后，后续受保护操作将自动触发二次验证弹窗
+        try {
+            await fetch('/api/behavior/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                },
+                body: JSON.stringify({
+                    risk_score: Math.max(0.6, conf),
+                    verdict: 'suspicious',
+                    sample_count: f.n,
+                    features: f,
+                }),
+            });
+        } catch (e) { /* 网络异常不影响前台判定 */ }
+    }
+
+    function autoTick() {
+        if (!autoActive) return;
+        const f = computeFeatures(autoPoints);
+        const conf = f ? humanConfidence(f) : 0;
+        const pct = Math.round(conf * 100);
+        if (autoState === 'human') {
+            updateBadge('human', '✅ 已验证真人');
+        } else if (autoState === 'bot') {
+            updateBadge('bot', '🤖 疑似自动化脚本');
+        } else {
+            updateBadge('collecting', (f && f.n >= 3) ? `验证中 ${pct}%` : '验证中…');
+        }
+        if (!f || f.n < MIN_POINTS || f.totalDist < MIN_PATH) { autoStable = 0; return; }
+        if (autoState === 'collecting') {
+            if (conf >= HUMAN_THRESHOLD) {
+                if (++autoStable >= CONF_STABLE_ROUNDS) enterHuman(f, conf);
+            } else if (conf <= 0.4) {
+                if (++autoStable >= CONF_STABLE_ROUNDS) enterBot(f, conf);
+            } else {
+                autoStable = 0;
+            }
+        } else if (autoState === 'human') {
+            // 若轨迹特征明显转为机器人化，则重新评估
+            if (conf <= 0.45) {
+                if (++autoStable >= CONF_STABLE_ROUNDS) { autoState = 'collecting'; autoStable = 0; }
+            } else {
+                autoStable = 0;
+            }
+        }
+    }
+
+    function beginAuto() {
+        if (autoActive) return;
+        if (!localStorage.getItem(TOKEN_KEY)) return;  // 仅登录用户启用
+        autoActive = true;
+        autoState = 'collecting';
+        autoStable = 0;
+        autoLastT = 0;
+        autoPoints = [];
+        initBadge();
+        if (autoBadge) autoBadge.classList.remove('hidden');
+        updateBadge('collecting', '验证中…');
+        document.addEventListener('pointermove', autoOnMove, { passive: true });
+        autoTimer = setInterval(autoTick, 300);
+    }
+
+    function endAuto() {
+        if (!autoActive) return;
+        autoActive = false;
+        document.removeEventListener('pointermove', autoOnMove);
+        if (autoTimer) clearInterval(autoTimer);
+        autoTimer = null;
+        if (autoBadge) autoBadge.classList.add('hidden');
+    }
+
+    return { open, close: cleanup, beginAuto, endAuto };
 })();
 
 /**
@@ -726,6 +856,9 @@ function requestTrajectoryReverify() {
                             return;
                         }
                         behaviorFlagged = false;  // 复核通过，清除客户端行为标记
+                        // 同步重置自动后台检测状态，使徽标回到重新评估
+                        MouseTrajectoryVerifier.endAuto();
+                        MouseTrajectoryVerifier.beginAuto();
                         finish(true);
                     } catch (e) {
                         finish(false);
@@ -768,8 +901,6 @@ function requestTrajectoryReverify() {
     showNotice();
 
     authBtn.addEventListener('click', openAuthModal);
-    const trajOpen = document.getElementById('traj-open');
-    if (trajOpen) trajOpen.addEventListener('click', () => MouseTrajectoryVerifier.open({ mode: 'standalone' }));
     modalClose.addEventListener('click', closeAuthModal);
     authModal.addEventListener('click', (e) => {
         if (e.target === authModal) closeAuthModal();
@@ -1634,10 +1765,13 @@ function updateAuthUI() {
     // 行为式人机认证：登录后开始采集轨迹，登出后停止
     if (userJson) {
         BehaviorMonitor.start();
+        // 鼠标轨迹人机验证（自动后台检测，无需按钮）：登录后于网站内持续采集并判定
+        MouseTrajectoryVerifier.beginAuto();
         // 启动会话状态轮询：实时感知账号被删除/撤销（数秒内弹出异常提示）
         startSessionStatusPoll();
     } else {
         BehaviorMonitor.stop();
+        MouseTrajectoryVerifier.endAuto();
         stopSessionStatusPoll();
     }
 }
