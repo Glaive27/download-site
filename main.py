@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, List
@@ -129,6 +131,30 @@ def _format_size(size_bytes: int) -> str:
 def _build_object_key(series: str, filename: str) -> str:
     """构建对象键（历史遗留，现仅用于占位）."""
     return f"{series}/{filename}"
+
+
+# ---------------------------------------------------------------------------
+# 当前在线访问数统计（内存结构，适用于单实例部署）
+# 记录每个访问会话最近一次活动的时间戳；超过窗口未活动视为离线。
+# ---------------------------------------------------------------------------
+ACTIVE_SESSIONS: dict[str, float] = {}
+ACTIVE_SESSIONS_LOCK = threading.Lock()
+ACTIVE_WINDOW_SECONDS = 60  # 超过该时长未发送心跳即视为离线
+
+
+def _prune_active_sessions() -> None:
+    """清理过期的会话记录，防止内存无限增长."""
+    now = time.time()
+    cutoff = now - ACTIVE_WINDOW_SECONDS
+    dead = [sid for sid, ts in ACTIVE_SESSIONS.items() if ts < cutoff]
+    for sid in dead:
+        ACTIVE_SESSIONS.pop(sid, None)
+
+
+def _count_active_sessions() -> int:
+    """返回当前在线（活跃）的访问会话数量，非累计值."""
+    _prune_active_sessions()
+    return len(ACTIVE_SESSIONS)
 
 
 def _next_version_number(db: Session, series: str) -> int:
@@ -451,6 +477,35 @@ async def admin_diag() -> JSONResponse:
         "secret_key_configured": secret_configured,
         "reset_endpoint_available": bool(os.environ.get("ADMIN_INIT_TOKEN")),
     })
+
+
+@app.post("/api/active-ping")
+async def active_ping(session_id: str = Form(...)) -> JSONResponse:
+    """记录一次访问活动心跳，用于统计当前在线访问数（所有访客均可调用）.
+
+    前端在打开页面时及之后定时调用本接口，携带一个本机唯一的 session_id。
+    后端仅记录该会话的最近活动时间，不做任何持久化。
+    """
+    sid = (session_id or "").strip()
+    if not sid or len(sid) > 64:
+        raise HTTPException(status_code=400, detail="非法的 session_id")
+
+    with ACTIVE_SESSIONS_LOCK:
+        ACTIVE_SESSIONS[sid] = time.time()
+    # 控制内存规模：每次心跳顺手清理过期会话
+    _prune_active_sessions()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/admin/active-users")
+async def admin_active_users(
+    current_user: Annotated[User, Depends(require_admin)],
+) -> JSONResponse:
+    """管理员专用：返回当前在线访问数（实时、非累计）.
+
+    统计所有在 ``ACTIVE_WINDOW_SECONDS`` 窗口内仍有心跳的访问会话。
+    """
+    return JSONResponse({"active_users": _count_active_sessions()})
 
 
 if __name__ == "__main__":

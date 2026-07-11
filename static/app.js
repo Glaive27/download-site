@@ -21,6 +21,13 @@ const uploadSeriesSelect = document.getElementById('upload-series-select');
 
 const TOKEN_KEY = 'download_site_token';
 const USER_KEY = 'download_site_user';
+const SESSION_KEY = 'download_site_session';
+
+const ACTIVE_PING_INTERVAL = 20000;   // 每 20 秒发送一次心跳
+const ONLINE_POLL_INTERVAL = 10000;   // 管理员每 10 秒刷新一次在线数
+
+let activePingTimer = null;
+let onlinePollTimer = null;
 
 /**
  * 初始化页面
@@ -42,6 +49,8 @@ const USER_KEY = 'download_site_user';
     authModal.addEventListener('click', (e) => {
         if (e.target === authModal) closeAuthModal();
     });
+
+    startActivePing();
 
     modalTabs.forEach(tab => {
         tab.addEventListener('click', () => switchTab(tab.dataset.tab));
@@ -468,6 +477,87 @@ function updateAuthUI() {
     }
 
     updateAdminPanel();
+    updateOnlineBadge();
+}
+
+/**
+ * 获取或生成本机唯一的会话 ID（用于统计在线访问数）
+ * @returns {string}
+ */
+function getSessionId() {
+    let sid = localStorage.getItem(SESSION_KEY);
+    if (!sid) {
+        sid = (crypto.randomUUID && crypto.randomUUID())
+            ? crypto.randomUUID()
+            : 's-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        localStorage.setItem(SESSION_KEY, sid);
+    }
+    return sid;
+}
+
+/**
+ * 向后端发送一次活动心跳，标记本会话当前在线
+ */
+async function pingActive() {
+    try {
+        await fetch('/api/active-ping', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ session_id: getSessionId() }),
+        });
+    } catch (error) {
+        // 网络异常时静默忽略，下次心跳会重试
+    }
+}
+
+/**
+ * 启动访问心跳：页面加载后先发一次，之后定时发送
+ */
+function startActivePing() {
+    pingActive();
+    if (activePingTimer) clearInterval(activePingTimer);
+    activePingTimer = setInterval(pingActive, ACTIVE_PING_INTERVAL);
+}
+
+/**
+ * 拉取当前在线访问数并刷新左上角徽标（管理员专用）
+ */
+async function refreshOnlineCount() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+    try {
+        const response = await fetch('/api/admin/active-users', {
+            headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        const countEl = document.getElementById('online-count');
+        if (countEl) countEl.textContent = data.active_users;
+    } catch (error) {
+        // 忽略临时网络错误
+    }
+}
+
+/**
+ * 根据管理员身份显示/隐藏在线人数徽标并控制轮询
+ */
+function updateOnlineBadge() {
+    const badge = document.getElementById('online-badge');
+    if (!badge) return;
+
+    if (currentUserIsAdmin()) {
+        badge.classList.remove('hidden');
+        refreshOnlineCount();
+        if (!onlinePollTimer) {
+            onlinePollTimer = setInterval(refreshOnlineCount, ONLINE_POLL_INTERVAL);
+        }
+    } else {
+        badge.classList.add('hidden');
+        if (onlinePollTimer) {
+            clearInterval(onlinePollTimer);
+            onlinePollTimer = null;
+        }
+    }
 }
 
 /**
