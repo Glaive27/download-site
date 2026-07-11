@@ -28,6 +28,7 @@
                 <div class="header-auth" id="header-auth">
                     <button class="btn btn-primary" id="auth-btn">登录 / 注册</button>
                 </div>
+                <button class="btn btn-ghost" id="traj-open" type="button">轨迹验证</button>
             </div>
         </header>
 
@@ -129,6 +130,39 @@
                 为保障账号安全，您已被自动登出。如有疑问，请联系管理员。
             </p>
             <button class="btn btn-primary" id="anomaly-confirm">知道了</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="trajectory-modal">
+        <div class="modal glass-card trajectory-card" role="dialog" aria-modal="true" aria-labelledby="traj-title">
+            <button class="modal-close" id="traj-close" aria-label="关闭">&times;</button>
+            <h2 class="traj-title" id="traj-title">鼠标轨迹人机验证</h2>
+            <p class="traj-desc">
+                请在下方区域中<strong>自然地移动鼠标</strong>。系统将实时分析轨迹的
+                <strong>路径、速度、加速度、方向变化与自然抖动</strong>，判断当前操作者是否为真人。
+                验证过程无需点击，判定完全由轨迹特征决定。
+            </p>
+            <div class="traj-track-wrap">
+                <canvas id="traj-canvas" class="traj-canvas"></canvas>
+                <div class="traj-hint" id="traj-hint">在此区域内移动鼠标…</div>
+            </div>
+            <div class="traj-gauge">
+                <div class="traj-gauge-label">人类相似度置信度 <span id="traj-confidence-val">采集中…</span></div>
+                <div class="traj-gauge-bar"><span class="traj-gauge-fill" id="traj-gauge-fill"></span></div>
+            </div>
+            <div class="traj-features">
+                <span class="traj-chip">样本 <b id="feat-samples">0</b></span>
+                <span class="traj-chip">速度变异 <b id="feat-cv">--</b></span>
+                <span class="traj-chip">方向熵 <b id="feat-dir">--</b></span>
+                <span class="traj-chip">自然抖动 <b id="feat-jitter">--</b></span>
+                <span class="traj-chip">加速度反转 <b id="feat-acc">--</b></span>
+            </div>
+            <div class="traj-result hidden" id="traj-result"></div>
+            <p class="traj-confirm-hint hidden" id="traj-confirm-hint">已判定为真人，点击「验证并继续」完成验证。</p>
+            <div class="traj-actions">
+                <button class="btn btn-secondary" id="traj-retry" type="button">重新开始</button>
+                <button class="btn btn-primary hidden" id="traj-confirm" type="button">验证并继续</button>
+            </div>
         </div>
     </div>
 

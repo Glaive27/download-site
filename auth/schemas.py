@@ -96,3 +96,18 @@ class BehaviorReverify(BaseModel):  # noqa: D101
     """行为异常后二次验证（ALTCHA）请求模型."""
 
     altcha: str = Field(..., min_length=1, description="ALTCHA 人机验证 payload")
+
+
+class TrajectoryVerdict(BaseModel):  # noqa: D101
+    """鼠标轨迹人机验证判定结果（前端计算，验证逻辑在前端完成）.
+
+    - verdict:    'human' / 'bot'
+    - confidence: 人类相似度置信度 0~1（越高越似真人）
+    - samples:    参与分析的采样点数
+    - features:   轨迹特征（速度变异系数、自然抖动、方向熵、加速度反转等），用于服务端合理性复核
+    """
+
+    verdict: Literal["human", "bot"] = "human"
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    samples: int = Field(0, ge=0)
+    features: dict = Field(default_factory=dict)

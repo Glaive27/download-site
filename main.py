@@ -29,7 +29,7 @@ load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
 from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User
-from auth.schemas import BehaviorReport, BehaviorReverify
+from auth.schemas import BehaviorReport, BehaviorReverify, TrajectoryVerdict
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
 from auth.altcha import ALTCHA_HMAC_KEY, verify_altcha
@@ -423,6 +423,40 @@ async def behavior_reverify(
 ) -> JSONResponse:
     """行为异常后的二次验证：通过 ALTCHA 即清除该用户的行为标记，恢复操作权限."""
     verify_altcha(payload.altcha)
+    current_user.behavior_flagged = False
+    current_user.behavior_risk = 0.0
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/behavior/reverify_trajectory")
+async def behavior_reverify_trajectory(
+    payload: Annotated[TrajectoryVerdict, Body()],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """行为异常后的二次验证（鼠标轨迹版）：前端完成轨迹分析判定 human 后调用本接口清标记.
+
+    验证逻辑（轨迹连续性 / 随机性 / 自然抖动 / 人类置信度阈值）完全在前端完成，
+    以取得最优的性能与响应速度。服务端仅做特征合理性复核（拒绝明显伪造的判定），
+    再清除行为标记、恢复操作权限。
+    """
+    if payload.verdict != "human" or payload.confidence < 0.5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="验证未通过：轨迹判定非真人",
+        )
+    feats = payload.features or {}
+    samples = int(payload.samples or 0)
+    speed_cv = float(feats.get("speed_cv", 0) or 0)
+    jitter = float(feats.get("jitter_ratio", 0) or 0)
+    dir_entropy = float(feats.get("dir_entropy", 0) or 0)
+    # 合理性复核：要求具备人类轨迹的基本特征（足够样本，且速度有变化 / 存在自然抖动 / 方向多样）
+    if samples < 25 or (speed_cv < 0.05 and jitter < 0.01 and dir_entropy < 0.5):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="轨迹特征不足，请重新验证",
+        )
     current_user.behavior_flagged = False
     current_user.behavior_risk = 0.0
     db.commit()

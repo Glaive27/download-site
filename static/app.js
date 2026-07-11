@@ -342,71 +342,398 @@ const BehaviorMonitor = (function () {
 })();
 
 /**
- * 当受保护操作因行为异常被拦截（401 BEHAVIOR_REVERIFY）时，弹出轻量二次验证。
+ * 鼠标轨迹人机验证（前端完成全部验证逻辑）
+ * ------------------------------------------------------------
+ * 收集鼠标移动轨迹（坐标/时间），提取路径、速度、加速度、方向变化、自然抖动等特征，
+ * 融合人类行为先验（连续性、随机性、自然抖动）估算「人类相似度置信度」，达到阈值即判真人。
+ * 全程在前端完成，实时绘制轨迹并提供视觉反馈，验证完成输出明确判定结果。
+ * 不依赖按钮点击检测：判定完全由轨迹特征决定，按钮仅用于控制/提交已算出的结果。
+ */
+const MouseTrajectoryVerifier = (function () {
+    const SAMPLE_MIN_INTERVAL = 33;  // 采样节流 ≈ 30Hz
+    const MAX_POINTS = 400;
+    const MIN_POINTS = 25;
+    const MIN_PATH = 200;            // px，轨迹过短不终判
+    const TELEPORT_SPEED = 12;       // px/ms，超过视为瞬移（非人类）
+    const TARGET_POINTS = 90;        // 采样充足即终判
+    const MAX_TIME_MS = 15000;       // 最长验证时长
+    const CONF_STABLE_ROUNDS = 6;    // 置信度连续稳定轮数 → 终判
+    const HUMAN_THRESHOLD = 0.6;     // 人类置信度阈值
+
+    let canvas, ctx, hint, gaugeFill, confVal, resultBox, retryBtn, confirmBtn, confirmHint;
+    let points = [];
+    let lastT = 0;
+    let active = false;
+    let timer = null;
+    let startedAt = 0;
+    let mode = 'standalone';
+    let onResult = null;
+    let stableCount = 0;
+    let lastConfidence = -1;
+    let finalized = false;
+    let pendingResult = null;
+
+    function initDom() {
+        canvas = document.getElementById('traj-canvas');
+        if (canvas) ctx = canvas.getContext('2d');
+        hint = document.getElementById('traj-hint');
+        gaugeFill = document.getElementById('traj-gauge-fill');
+        confVal = document.getElementById('traj-confidence-val');
+        resultBox = document.getElementById('traj-result');
+        retryBtn = document.getElementById('traj-retry');
+        confirmBtn = document.getElementById('traj-confirm');
+        confirmHint = document.getElementById('traj-confirm-hint');
+        if (retryBtn) retryBtn.addEventListener('click', reset);
+        if (confirmBtn) confirmBtn.addEventListener('click', onConfirm);
+    }
+
+    function sizeCanvas() {
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(rect.width * dpr));
+        canvas.height = Math.max(1, Math.round(rect.height * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function relPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function onMove(e) {
+        if (!active) return;
+        if (e.isTrusted === false) return;  // 过滤自动化脚本注入的合成事件
+        const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
+        if (now - lastT < SAMPLE_MIN_INTERVAL) return;
+        const p = relPos(e);
+        points.push({ x: p.x, y: p.y, t: now });
+        if (points.length > MAX_POINTS) points.shift();
+        lastT = now;
+        if (hint) hint.style.opacity = '0';
+    }
+
+    function std(arr) {
+        if (arr.length < 2) return 0;
+        const m = avg(arr);
+        let s = 0;
+        for (const v of arr) s += (v - m) * (v - m);
+        return Math.sqrt(s / arr.length);
+    }
+
+    function movingAverage(pts, w) {
+        const out = [];
+        for (let i = 0; i < pts.length; i++) {
+            const s = Math.max(0, i - w), e = Math.min(pts.length - 1, i + w);
+            let x = 0, y = 0, c = 0;
+            for (let j = s; j <= e; j++) { x += pts[j].x; y += pts[j].y; c++; }
+            out.push({ x: x / c, y: y / c });
+        }
+        return out;
+    }
+
+    function computeFeatures() {
+        const n = points.length;
+        if (n < 2) return null;
+        const speeds = [], dts = [], dirChanges = [];
+        let totalDist = 0, teleported = false;
+        for (let i = 1; i < n; i++) {
+            const a = points[i - 1], b = points[i];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const dt = b.t - a.t;
+            if (dt <= 0) continue;
+            const dist = Math.hypot(dx, dy);
+            totalDist += dist;
+            const sp = dist / dt;
+            speeds.push(sp);
+            dts.push(dt);
+            if (sp > TELEPORT_SPEED) teleported = true;
+            if (i >= 2) {
+                const t1 = Math.atan2(a.y - points[i - 2].y, a.x - points[i - 2].x);
+                const t2 = Math.atan2(dy, dx);
+                let d = t2 - t1;
+                while (d > Math.PI) d -= 2 * Math.PI;
+                while (d < -Math.PI) d += 2 * Math.PI;
+                dirChanges.push(d);
+            }
+        }
+        // 加速度（速度变化率）反转次数：人类加减速频繁、方向多变
+        let accelSignChanges = 0, lastSign = 0;
+        for (let i = 1; i < speeds.length; i++) {
+            const dt = dts[i] || dts[i - 1];
+            if (!dt) continue;
+            const acc = (speeds[i] - speeds[i - 1]) / dt;
+            const s = Math.sign(acc);
+            if (s !== 0 && lastSign !== 0 && s !== lastSign) accelSignChanges++;
+            if (s !== 0) lastSign = s;
+        }
+        // 自然抖动：相对移动平均轨迹的高频残差
+        const smoothed = movingAverage(points, 4);
+        let jitterSum = 0, jitterCnt = 0;
+        for (let i = 2; i < n - 2; i++) {
+            jitterSum += Math.hypot(points[i].x - smoothed[i].x, points[i].y - smoothed[i].y);
+            jitterCnt++;
+        }
+        const jitterMean = jitterCnt ? jitterSum / jitterCnt : 0;
+        const meanStep = totalDist / Math.max(1, n - 1);
+        const jitterRatio = meanStep > 0 ? jitterMean / meanStep : 0;
+
+        const sx = points[0].x, sy = points[0].y;
+        const ex = points[n - 1].x, ey = points[n - 1].y;
+        const netDisp = Math.hypot(ex - sx, ey - sy);
+        const straightness = totalDist > 0 ? netDisp / totalDist : 0;
+
+        const meanSpeed = avg(speeds);
+        const speedCv = meanSpeed > 0 ? std(speeds) / meanSpeed : 0;
+        const dtMean = avg(dts);
+        const dtCv = dtMean > 0 ? std(dts) / dtMean : 0;
+        const dirEntropy = entropy(dirChanges, 12);
+
+        return {
+            n, totalDist, straightness, speed_cv: speedCv, dt_cv: dtCv,
+            dir_entropy: dirEntropy, jitter_ratio: jitterRatio, jitter_mean: jitterMean,
+            accel_sign_changes: accelSignChanges, teleported, meanSpeed,
+        };
+    }
+
+    function humanConfidence(f) {
+        if (!f) return 0;
+        let c = 0.5;  // 中性基线
+        // 人类正向特征（推动置信度上升）
+        if (f.speed_cv >= 0.2 && f.speed_cv <= 1.6) c += 0.12;
+        if (f.dir_entropy > 1.2) c += 0.12;
+        if (f.jitter_ratio > 0.02 && f.jitter_ratio < 0.45) c += 0.15;
+        if (f.accel_sign_changes >= 3) c += 0.10;
+        if (f.dt_cv > 0.15) c += 0.08;
+        if (f.straightness > 0.3 && f.straightness < 0.98) c += 0.08;
+        // 机器人负向特征（推动置信度下降）
+        if (f.teleported) c -= 0.45;
+        if (f.straightness > 0.97 && f.totalDist > 300) c -= 0.30;
+        if (f.dt_cv < 0.03 && f.n > 30) c -= 0.18;
+        if (f.jitter_ratio < 0.005 && f.n > 20) c -= 0.20;
+        if (f.speed_cv < 0.04 && f.totalDist > 200) c -= 0.18;
+        return Math.max(0, Math.min(1, c));
+    }
+
+    function confColor(c) {
+        if (c >= 0.6) return 'linear-gradient(90deg,#22c55e,#16a34a)';
+        if (c >= 0.4) return 'linear-gradient(90deg,#f59e0b,#d97706)';
+        return 'linear-gradient(90deg,#ef4444,#dc2626)';
+    }
+
+    function setChip(id, val) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    }
+
+    function draw() {
+        if (!ctx || !canvas) return;
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+        if (points.length < 2) return;
+        const grad = ctx.createLinearGradient(
+            points[0].x, points[0].y,
+            points[points.length - 1].x, points[points.length - 1].y);
+        grad.addColorStop(0, '#5b8cff');
+        grad.addColorStop(1, '#9b6bff');
+        ctx.lineWidth = 2.5;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.stroke();
+        const lp = points[points.length - 1];
+        ctx.fillStyle = '#9b6bff';
+        ctx.beginPath();
+        ctx.arc(lp.x, lp.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function tick() {
+        if (!active) return;
+        draw();
+        const f = computeFeatures();
+        const conf = f ? humanConfidence(f) : 0;
+        const pct = Math.round(conf * 100);
+        if (gaugeFill) {
+            gaugeFill.style.width = (f ? pct : 0) + '%';
+            gaugeFill.style.background = confColor(conf);
+        }
+        if (confVal) confVal.textContent = f ? pct + '%' : '采集中…';
+        setChip('feat-samples', f ? f.n : 0);
+        setChip('feat-cv', f ? round3(f.speed_cv).toFixed(3) : '--');
+        setChip('feat-dir', f ? round3(f.dir_entropy).toFixed(2) : '--');
+        setChip('feat-jitter', f ? round3(f.jitter_ratio).toFixed(3) : '--');
+        setChip('feat-acc', f ? f.accel_sign_changes : '--');
+
+        if (finalized) return;
+        const ready = f && f.n >= MIN_POINTS && f.totalDist >= MIN_PATH;
+        if (ready) {
+            if (Math.abs(conf - lastConfidence) < 0.02) stableCount++; else stableCount = 0;
+            lastConfidence = conf;
+            const elapsed = performance.now() - startedAt;
+            if (stableCount >= CONF_STABLE_ROUNDS || f.n >= TARGET_POINTS || elapsed > MAX_TIME_MS) {
+                finalize(conf, f);
+            }
+        } else {
+            stableCount = 0; lastConfidence = -1;
+        }
+    }
+
+    function finalize(conf, f) {
+        finalized = true;
+        active = false;
+        if (timer) clearInterval(timer);
+        timer = null;
+        canvas.removeEventListener('pointermove', onMove);
+        const verdict = conf >= HUMAN_THRESHOLD ? 'human' : 'bot';
+        pendingResult = { verdict, conf, f };
+        if (resultBox) {
+            resultBox.classList.remove('hidden');
+            const isHuman = verdict === 'human';
+            resultBox.className = 'traj-result ' + (isHuman ? 'human' : 'bot');
+            resultBox.innerHTML = `
+                <div class="traj-result-icon">${isHuman ? '✅' : '🤖'}</div>
+                <div class="traj-result-title">${isHuman ? '验证通过：判定为真人' : '验证未通过：判定为自动化脚本'}</div>
+                <div class="traj-result-desc">
+                    ${isHuman
+                        ? '轨迹特征符合人类行为模式（速度变化连续、方向自然多样、存在自然抖动）。'
+                        : '轨迹呈现机械化特征（如近似直线、匀速、定时或缺乏自然抖动），疑似自动化脚本。'}
+                </div>
+                <div class="traj-result-stats">
+                    <span>置信度 <b>${Math.round(conf * 100)}%</b></span>
+                    <span>样本 <b>${f.n}</b></span>
+                    <span>速度变异 <b>${round3(f.speed_cv).toFixed(2)}</b></span>
+                    <span>方向熵 <b>${round3(f.dir_entropy).toFixed(2)}</b></span>
+                    <span>自然抖动 <b>${round3(f.jitter_ratio).toFixed(3)}</b></span>
+                </div>
+            `;
+        }
+        if (verdict === 'human') {
+            if (confirmBtn) confirmBtn.classList.remove('hidden');
+            if (confirmHint) confirmHint.classList.remove('hidden');
+        }
+    }
+
+    function onConfirm() {
+        if (!pendingResult) return;
+        const { verdict, conf, f } = pendingResult;
+        if (verdict !== 'human') { reset(); return; }
+        cleanup();
+        if (onResult) {
+            const cb = onResult;
+            onResult = null;
+            cb(true, { verdict, confidence: conf, samples: f.n, features: f });
+        }
+    }
+
+    function reset() {
+        points = [];
+        lastT = 0;
+        finalized = false;
+        pendingResult = null;
+        stableCount = 0;
+        lastConfidence = -1;
+        if (resultBox) { resultBox.classList.add('hidden'); resultBox.innerHTML = ''; }
+        if (confirmBtn) confirmBtn.classList.add('hidden');
+        if (confirmHint) confirmHint.classList.add('hidden');
+        if (hint) hint.style.opacity = '1';
+        if (gaugeFill) gaugeFill.style.width = '0%';
+        if (confVal) confVal.textContent = '采集中…';
+        ['feat-samples', 'feat-cv', 'feat-dir', 'feat-jitter', 'feat-acc']
+            .forEach(id => setChip(id, id === 'feat-samples' ? 0 : '--'));
+        start();
+    }
+
+    function start() {
+        if (active) return;
+        active = true;
+        startedAt = performance.now();
+        requestAnimationFrame(sizeCanvas);
+        canvas.addEventListener('pointermove', onMove, { passive: true });
+        timer = setInterval(tick, 60);
+    }
+
+    function cleanup() {
+        if (timer) clearInterval(timer);
+        timer = null;
+        active = false;
+        if (canvas) canvas.removeEventListener('pointermove', onMove);
+        const modal = document.getElementById('trajectory-modal');
+        if (modal) modal.classList.remove('active');
+    }
+
+    function cancel() {
+        cleanup();
+        if (onResult) {
+            const cb = onResult;
+            onResult = null;
+            cb(false);
+        }
+    }
+
+    function open(opts) {
+        initDom();
+        mode = (opts && opts.mode) || 'standalone';
+        onResult = (opts && opts.onResult) || null;
+        const modal = document.getElementById('trajectory-modal');
+        if (modal) modal.classList.add('active');
+        reset();
+        const closeBtn = document.getElementById('traj-close');
+        if (closeBtn) closeBtn.addEventListener('click', cancel, { once: true });
+        if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) cancel(); }, { once: true });
+    }
+
+    return { open, close: cleanup };
+})();
+
+/**
+ * 当受保护操作因行为异常被拦截（401 BEHAVIOR_REVERIFY）时，弹出鼠标轨迹二次验证。
+ * 用户在弹窗区域内自然移动鼠标，前端完成轨迹分析并判定 human 后，调用
+ * /api/behavior/reverify_trajectory 清除行为标记，再自动重试原请求。
  * 返回一个 Promise：用户通过验证 resolve(true)，关闭/取消 resolve(false)。
  * @returns {Promise<boolean>}
  */
-function requestBehaviorReverify() {
+function requestTrajectoryReverify() {
     return new Promise((resolve) => {
-        const modal = document.getElementById('behavior-modal');
-        const msg = document.getElementById('behavior-message');
-        const verifyBtn = document.getElementById('behavior-verify');
-        const closeBtn = document.getElementById('behavior-close');
-        const widget = document.getElementById('behavior-altcha');
-        msg.textContent = '';
-        msg.className = 'auth-message';
-
-        // 每次打开强制拉取一个全新挑战（避免复用旧凭证）
-        if (widget) {
-            widget.setAttribute('challenge', '/api/altcha/challenge?t=' + Date.now());
-        }
-        modal.classList.add('active');
-
-        let done = false;
+        let settled = false;
         const finish = (val) => {
-            if (done) return;
-            done = true;
-            modal.classList.remove('active');
-            verifyBtn.removeEventListener('click', onVerify);
-            closeBtn.removeEventListener('click', onClose);
+            if (settled) return;
+            settled = true;
+            MouseTrajectoryVerifier.close();
             resolve(val);
         };
-        const onClose = () => finish(false);
-        const onVerify = async () => {
-            const payload = getAltchaPayload('behavior-modal', 'behavior');
-            if (!payload) {
-                msg.textContent = '请先完成人机验证';
-                msg.className = 'auth-message';
-                return;
-            }
-            try {
-                const res = await fetch('/api/behavior/reverify', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
-                    },
-                    body: JSON.stringify({ altcha: payload }),
-                });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({ detail: '验证失败' }));
-                    msg.textContent = (err && err.detail) || '验证失败';
-                    msg.className = 'auth-message';
-                    return;
-                }
-                behaviorFlagged = false;  // 复核通过，清除客户端行为标记
-                finish(true);
-            } catch (e) {
-                msg.textContent = '网络错误，请重试';
-                msg.className = 'auth-message';
-            }
-        };
 
-        verifyBtn.addEventListener('click', onVerify);
-        closeBtn.addEventListener('click', onClose);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) onClose();
-        });
+        const launch = () => {
+            MouseTrajectoryVerifier.open({
+                mode: 'challenge',
+                onResult: async (ok, payload) => {
+                    if (!ok) { finish(false); return; }
+                    try {
+                        const res = await fetch('/api/behavior/reverify_trajectory', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                            },
+                            body: JSON.stringify(payload),
+                        });
+                        if (!res.ok) {
+                            // 后端特征复核未过：重新打开让用户重试
+                            launch();
+                            return;
+                        }
+                        behaviorFlagged = false;  // 复核通过，清除客户端行为标记
+                        finish(true);
+                    } catch (e) {
+                        finish(false);
+                    }
+                },
+            });
+        };
+        launch();
     });
 }
 
@@ -441,6 +768,8 @@ function requestBehaviorReverify() {
     showNotice();
 
     authBtn.addEventListener('click', openAuthModal);
+    const trajOpen = document.getElementById('traj-open');
+    if (trajOpen) trajOpen.addEventListener('click', () => MouseTrajectoryVerifier.open({ mode: 'standalone' }));
     modalClose.addEventListener('click', closeAuthModal);
     authModal.addEventListener('click', (e) => {
         if (e.target === authModal) closeAuthModal();
@@ -1157,7 +1486,7 @@ async function handleBehaviorChallenge(responsePromise, url, options) {
             detail = (data && data.detail) || '';
         } catch (e) { /* 非 JSON 响应，忽略 */ }
         if (typeof detail === 'string' && detail.startsWith('BEHAVIOR_REVERIFY')) {
-            const verified = await requestBehaviorReverify();
+            const verified = await requestTrajectoryReverify();
             if (verified) {
                 // 重新发起原请求（带最新 token）
                 const token = localStorage.getItem(TOKEN_KEY);

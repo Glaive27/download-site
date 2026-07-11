@@ -570,6 +570,90 @@ class TestBehaviorAuth:
         assert resp.status_code == 400
 
 
+class TestTrajectoryReverify:
+    """鼠标轨迹人机验证（前端完成判定）的复核端点测试."""
+
+    def _token(self, client: TestClient, username: str, password: str) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": username, "password": password, "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_trajectory_reverify_requires_auth(self, client: TestClient):
+        """未登录提交轨迹判定应返回 401."""
+        resp = client.post(
+            "/api/behavior/reverify_trajectory",
+            json={"verdict": "human", "confidence": 0.9, "samples": 80,
+                  "features": {"speed_cv": 0.5, "jitter_ratio": 0.1, "dir_entropy": 1.5}},
+        )
+        assert resp.status_code == 401
+
+    def test_trajectory_reverify_human_clears_flag(
+        self,
+        client: TestClient,
+        normal_user: User,
+        db_session: Session,
+    ):
+        """human 判定（含合理特征）应通过复核并清除行为标记."""
+        token = self._token(client, "testuser", "testpass123")
+        # 先标记该用户
+        client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.9, "verdict": "suspicious"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is True
+
+        resp = client.post(
+            "/api/behavior/reverify_trajectory",
+            json={"verdict": "human", "confidence": 0.85, "samples": 80,
+                  "features": {"speed_cv": 0.5, "jitter_ratio": 0.1,
+                               "dir_entropy": 1.5, "straightness": 0.7}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is False
+        assert normal_user.behavior_risk == 0.0
+
+    def test_trajectory_reverify_rejects_bot(self, client: TestClient, normal_user: User):
+        """bot 判定应被拒绝（400）."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/behavior/reverify_trajectory",
+            json={"verdict": "bot", "confidence": 0.1, "samples": 80,
+                  "features": {"speed_cv": 0.01, "jitter_ratio": 0.0, "dir_entropy": 0.1}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400
+
+    def test_trajectory_reverify_rejects_insufficient_features(
+        self,
+        client: TestClient,
+        normal_user: User,
+    ):
+        """特征不足（样本过少或缺乏人类特征）应被拒绝（400）."""
+        token = self._token(client, "testuser", "testpass123")
+        # 样本不足 25
+        resp1 = client.post(
+            "/api/behavior/reverify_trajectory",
+            json={"verdict": "human", "confidence": 0.9, "samples": 10,
+                  "features": {"speed_cv": 0.5, "jitter_ratio": 0.1, "dir_entropy": 1.5}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp1.status_code == 400
+        # 缺乏人类特征（速度无变化、无抖动、方向单一）
+        resp2 = client.post(
+            "/api/behavior/reverify_trajectory",
+            json={"verdict": "human", "confidence": 0.9, "samples": 80,
+                  "features": {"speed_cv": 0.0, "jitter_ratio": 0.0, "dir_entropy": 0.0}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp2.status_code == 400
+
+
 class TestAntiAutomation:
     """反自动化检测：客户端环境指纹 bot_score 服务端硬拦截."""
 
