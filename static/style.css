@@ -1122,3 +1122,31 @@ altcha-widget {
     --altcha-color-accent: var(--accent);
     --altcha-color-accent-text: #020205;
 }
+
+/* ===== 行为异常二次验证弹窗 ===== */
+.behavior-card {
+    max-width: 380px;
+    text-align: center;
+}
+
+.behavior-title {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 10px;
+}
+
+.behavior-desc {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 16px;
+}
+
+.behavior-card altcha-widget {
+    margin: 6px auto 16px;
+}
+
+#behavior-verify {
+    width: 100%;
+}

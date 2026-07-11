@@ -453,3 +453,118 @@ class TestDownloadHistory:
         )
         assert resp.status_code == 200
         assert db_session.query(DownloadLog).filter_by(user_id=normal_user.id).count() == 0
+
+
+class TestBehaviorAuth:
+    """行为式人机认证（鼠标轨迹分析）后端接口测试."""
+
+    def _token(self, client: TestClient, username: str, password: str) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": username, "password": password, "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_report_requires_auth(self, client: TestClient):
+        """未登录上报行为风险应返回 401."""
+        resp = client.post("/api/behavior/report", json={"risk_score": 0.9, "verdict": "suspicious"})
+        assert resp.status_code == 401
+
+    def test_report_flags_user(self, client: TestClient, normal_user: User, db_session: Session):
+        """高风险上报应标记用户为需二次验证."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.9, "verdict": "suspicious", "sample_count": 50,
+                  "features": {"cv": 0.01, "periodicity": 0.99}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["flagged"] is True
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is True
+        assert normal_user.behavior_risk == 0.9
+
+    def test_report_low_risk_not_flagged(
+        self,
+        client: TestClient,
+        normal_user: User,
+        db_session: Session,
+    ):
+        """低风险（真人）上报不应标记用户."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.1, "verdict": "human", "sample_count": 60,
+                  "features": {"cv": 0.45, "periodicity": 0.2}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.json()["flagged"] is False
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is False
+
+    def test_flagged_user_blocked_from_download_log(
+        self,
+        client: TestClient,
+        db_session: Session,
+        normal_user: User,
+        admin_user: User,
+    ):
+        """被标记用户下载归属接口返回 401 BEHAVIOR_REVERIFY."""
+        f = FileRecord(
+            series="s1", filename="s1_v1.zip", original_filename="实例.zip",
+            version="v1", size=10, mime_type="application/zip",
+            object_key="s1/s1_v1.zip", file_data=b"data", file_mime="application/zip",
+        )
+        db_session.add(f)
+        db_session.commit()
+
+        user_token = self._token(client, "testuser", "testpass123")
+        # 先标记该用户
+        client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.9, "verdict": "suspicious"},
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        blocked = client.post(
+            "/api/download-log/s1_v1.zip",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert blocked.status_code == 401
+        assert blocked.json()["detail"].startswith("BEHAVIOR_REVERIFY")
+
+    def test_reverify_clears_flag(
+        self,
+        client: TestClient,
+        normal_user: User,
+        db_session: Session,
+    ):
+        """通过 ALTCHA 复核应清除行为标记."""
+        token = self._token(client, "testuser", "testpass123")
+        client.post(
+            "/api/behavior/report",
+            json={"risk_score": 0.9, "verdict": "suspicious"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is True
+
+        reverify = client.post(
+            "/api/behavior/reverify",
+            json={"altcha": altcha_payload()},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert reverify.status_code == 200
+        db_session.refresh(normal_user)
+        assert normal_user.behavior_flagged is False
+        assert normal_user.behavior_risk == 0.0
+
+    def test_reverify_invalid_altcha(self, client: TestClient, normal_user: User):
+        """复核使用非法 ALTCHA 应返回 400."""
+        token = self._token(client, "testuser", "testpass123")
+        resp = client.post(
+            "/api/behavior/reverify",
+            json={"altcha": "bad"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400

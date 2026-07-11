@@ -29,70 +29,79 @@ if not logger.handlers:
 
 
 def _auto_migrate() -> None:
-    """自动迁移：基于 ORM 模型动态补齐 file_records 表缺失的列.
+    """自动迁移：基于 ORM 模型动态补齐所有表缺失的列.
 
     SQLAlchemy 的 create_all 只创建不存在的表，不会给已有表添加新列。
-    本函数动态对比 FileRecord 模型与数据库实际列，自动 ALTER TABLE ADD COLUMN，
-    覆盖所有缺失列（如 original_filename、file_data、file_mime、created_at 等），
-    避免手动维护迁移列表导致漏列（漏列会让 /files 查询直接 500）。
+    本函数遍历 ``Base.metadata`` 中的所有表，对比数据库实际列，自动
+    ``ALTER TABLE ADD COLUMN`` 补齐缺失列（如 users 的 behavior_*、file_records
+    的 original_filename 等），避免手动维护迁移列表导致漏列（漏列会让查询直接 500）。
 
     本函数内部完全容错，任何异常都不会导致应用启动失败。
     """
-    from sqlalchemy import DateTime, inspect as _sa_inspect, text as _sa_text
+    from sqlalchemy import Boolean, DateTime, inspect as _sa_inspect, text as _sa_text
 
     try:
         is_postgres = engine.dialect.name == "postgresql"
     except Exception:
         is_postgres = False
 
-    try:
-        existing_columns = {
-            col["name"] for col in _sa_inspect(engine).get_columns("file_records")
-        }
-    except Exception:
-        # 表可能还不存在，create_all 会负责创建完整表
-        return
-
     db = SessionLocal()
     try:
-        for col in FileRecord.__table__.columns:
-            col_name = col.name
-            if col_name == "id":  # 主键不会缺失
-                continue
-            if col_name in existing_columns:
-                continue
+        inspector = _sa_inspect(engine)
+        for table in Base.metadata.tables.values():
+            table_name = table.name
             try:
-                # 用 SQLAlchemy 方言把列类型编译成数据库原生 DDL 类型
-                col_type = col.type.compile(dialect=engine.dialect)
-                # 第一步：先以可空方式添加列。
-                # 注意：SQLite 旧版本不允许 ADD COLUMN 使用非恒定默认值（如 CURRENT_TIMESTAMP），
-                # 因此这里不写 DEFAULT，改为后续 UPDATE 填充，PostgreSQL / SQLite 均可兼容。
-                add_ddl = f'ALTER TABLE file_records ADD COLUMN "{col_name}" {col_type}'
-                if is_postgres:
-                    add_ddl = add_ddl.replace(" ADD COLUMN ", " ADD COLUMN IF NOT EXISTS ")
-                db.execute(_sa_text(add_ddl))
-                db.commit()
-                logger.info("✓ 自动迁移: file_records 表已添加 %s 列", col_name)
+                existing_columns = {
+                    col["name"] for col in inspector.get_columns(table_name)
+                }
+            except Exception:
+                # 表可能还不存在，create_all 会负责创建完整表，跳过
+                continue
 
-                # 第二步：若模型定义该列非空，先填充历史空值，再（仅 PG）设为 NOT NULL
-                if not col.nullable:
-                    if isinstance(col.type, DateTime):
-                        default_expr = "CURRENT_TIMESTAMP"
-                    else:
-                        default_expr = "''"
-                    db.execute(_sa_text(
-                        f'UPDATE file_records SET "{col_name}" = {default_expr} '
-                        f'WHERE "{col_name}" IS NULL'
-                    ))
-                    db.commit()
+            for col in table.columns:
+                col_name = col.name
+                if col_name == "id":  # 主键不会缺失
+                    continue
+                if col_name in existing_columns:
+                    continue
+                try:
+                    # 用 SQLAlchemy 方言把列类型编译成数据库原生 DDL 类型
+                    col_type = col.type.compile(dialect=engine.dialect)
+                    # 第一步：先以可空方式添加列。
+                    # 注意：SQLite 旧版本不允许 ADD COLUMN 使用非恒定默认值
+                    # （如 CURRENT_TIMESTAMP），因此这里不写 DEFAULT，改为后续
+                    # UPDATE 填充，PostgreSQL / SQLite 均可兼容。
+                    add_ddl = f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col_type}'
                     if is_postgres:
+                        add_ddl = add_ddl.replace(" ADD COLUMN ", " ADD COLUMN IF NOT EXISTS ")
+                    db.execute(_sa_text(add_ddl))
+                    db.commit()
+                    logger.info("✓ 自动迁移: %s 表已添加 %s 列", table_name, col_name)
+
+                    # 第二步：若模型定义该列非空，先填充历史空值，再（仅 PG）设为 NOT NULL
+                    if not col.nullable:
+                        if isinstance(col.type, DateTime):
+                            default_expr = "CURRENT_TIMESTAMP"
+                        elif isinstance(col.type, Boolean):
+                            # 布尔列：PG 用 FALSE，SQLite 用 0（旧版不识别 FALSE 关键字）
+                            default_expr = "FALSE" if is_postgres else "0"
+                        else:
+                            default_expr = "''"
                         db.execute(_sa_text(
-                            f'ALTER TABLE file_records ALTER COLUMN "{col_name}" SET NOT NULL'
+                            f'UPDATE "{table_name}" SET "{col_name}" = {default_expr} '
+                            f'WHERE "{col_name}" IS NULL'
                         ))
                         db.commit()
-            except Exception as exc:
-                db.rollback()
-                logger.warning("⚠ 自动迁移 %s 列失败（已忽略）: %s", col_name, exc)
+                        if is_postgres:
+                            db.execute(_sa_text(
+                                f'ALTER TABLE "{table_name}" ALTER COLUMN "{col_name}" SET NOT NULL'
+                            ))
+                            db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning(
+                        "⚠ 自动迁移 %s.%s 失败（已忽略）: %s", table_name, col_name, exc,
+                    )
     finally:
         db.close()
 

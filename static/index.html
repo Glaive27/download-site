@@ -104,6 +104,17 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="behavior-modal">
+        <div class="modal glass-card behavior-card" role="dialog" aria-modal="true" aria-labelledby="behavior-title">
+            <button class="modal-close" id="behavior-close" aria-label="关闭">&times;</button>
+            <h2 class="behavior-title" id="behavior-title">安全验证</h2>
+            <p class="behavior-desc">检测到操作行为异常，为确认是本人操作，请完成以下验证后继续。</p>
+            <altcha-widget id="behavior-altcha" challenge="/api/altcha/challenge" name="altcha"></altcha-widget>
+            <button class="btn btn-primary" id="behavior-verify">验证并继续</button>
+            <p class="auth-message" id="behavior-message"></p>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="stats-modal">
         <div class="modal glass-card stats-modal" role="dialog" aria-modal="true" aria-labelledby="stats-title">
             <button class="modal-close" id="stats-close" aria-label="关闭">&times;</button>

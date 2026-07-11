@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, LargeBinary, String
 
 from auth.database import Base
 
@@ -23,6 +23,11 @@ class User(Base):  # noqa: D101
     username = Column(String(64), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(16), default="user", nullable=False)
+    # 行为式人机认证（基于鼠标轨迹）：
+    # behavior_risk  —— 最近一次上报的风险分（0~1，越高越疑似机器人）
+    # behavior_flagged —— 是否因行为异常被要求二次验证 / 限制操作
+    behavior_risk = Column(Float, nullable=True, default=0.0)
+    behavior_flagged = Column(Boolean, nullable=False, default=False)
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<User(id={self.id}, username={self.username}, role={self.role})>"

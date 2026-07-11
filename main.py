@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import logging
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, Body
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -29,11 +29,15 @@ load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
 from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User
+from auth.schemas import BehaviorReport, BehaviorReverify
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
-from auth.altcha import ALTCHA_HMAC_KEY
+from auth.altcha import ALTCHA_HMAC_KEY, verify_altcha
 from auth.security import get_current_user, require_admin
 from storage import delete_object, r2_enabled
+
+# 行为式人机认证：风险分达到该阈值即标记该用户需二次验证 / 限制操作
+BEHAVIOR_RISK_THRESHOLD = 0.6
 
 
 logger = logging.getLogger(__name__)
@@ -364,6 +368,67 @@ async def delete_file(
     return JSONResponse({"message": f"文件 {filename} 已删除"})
 
 
+def require_behavior_ok(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """行为式人机认证守卫：被标记异常的用户需先完成二次验证.
+
+    与 ``get_current_user`` 组合使用；命中则返回 401（detail 以 BEHAVIOR_REVERIFY
+    开头），前端据此弹出轻量二次验证（ALTCHA）并在通过后清除标记、重试原请求。
+    """
+    if current_user.behavior_flagged:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="BEHAVIOR_REVERIFY: 检测到异常操作，请完成人机验证",
+        )
+    return current_user
+
+
+def require_behavior_ok_admin(
+    current_user: Annotated[User, Depends(require_admin)],
+) -> User:
+    """行为守卫的管理员版本（先校验管理员，再校验行为标记）."""
+    if current_user.behavior_flagged:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="BEHAVIOR_REVERIFY: 检测到异常操作，请完成人机验证",
+        )
+    return current_user
+
+
+@app.post("/api/behavior/report")
+async def behavior_report(
+    payload: Annotated[BehaviorReport, Body()],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """接收前端鼠标轨迹分析得出的风险评分，更新该用户的行为风险与标记.
+
+    仅记录聚合特征（风险分 + 少量统计量），不保存任何原始鼠标坐标，兼顾性能与隐私。
+    风险达到阈值即标记 ``behavior_flagged``，后续受保护操作会被守卫拦截并要求二次验证。
+    """
+    risk = float(payload.risk_score)
+    flagged = risk >= BEHAVIOR_RISK_THRESHOLD or payload.verdict == "suspicious"
+    current_user.behavior_risk = risk
+    current_user.behavior_flagged = flagged
+    db.commit()
+    return JSONResponse({"flagged": flagged, "risk": round(risk, 3)})
+
+
+@app.post("/api/behavior/reverify")
+async def behavior_reverify(
+    payload: Annotated[BehaviorReverify, Body()],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """行为异常后的二次验证：通过 ALTCHA 即清除该用户的行为标记，恢复操作权限."""
+    verify_altcha(payload.altcha)
+    current_user.behavior_flagged = False
+    current_user.behavior_risk = 0.0
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
 @app.get("/download/{filename}")
 async def download_file(
     filename: str,
@@ -409,7 +474,7 @@ async def download_file(
 @app.post("/api/download-log/{filename}")
 async def log_download(
     filename: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_behavior_ok)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
     """记录一次「已登录用户」的下载行为（用于账号历史下载统计）.
@@ -598,7 +663,7 @@ async def admin_active_users(
 
 @app.get("/api/admin/stats")
 async def admin_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_behavior_ok_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
     """管理员专用：返回数据记录统计.
@@ -644,7 +709,7 @@ async def admin_stats(
 @app.get("/api/admin/users/{username}/downloads")
 async def user_download_history(
     username: str,
-    current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_behavior_ok_admin)],
     db: Annotated[Session, Depends(get_db)],
     order: str = "desc",
 ) -> JSONResponse:

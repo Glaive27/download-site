@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SAFE_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_\u4e00-\u9fa5]{3,32}$")
@@ -70,3 +72,24 @@ class UserRegisterResponse(BaseModel):  # noqa: D101
     username: str
     role: str
     message: str
+
+
+class BehaviorReport(BaseModel):  # noqa: D101
+    """前端行为式人机认证上报模型（仅聚合特征，不含原始坐标，保护隐私）.
+
+    - risk_score: 综合风险分 0~1（越高越疑似机器人）
+    - verdict:    'human' / 'suspicious'
+    - sample_count: 参与分析的采样点数
+    - features: 各类特征（速度变异系数、方向熵、周期性等），用于审计与调参
+    """
+
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    verdict: Literal["human", "suspicious"] = "human"
+    sample_count: int = Field(0, ge=0)
+    features: dict = Field(default_factory=dict)
+
+
+class BehaviorReverify(BaseModel):  # noqa: D101
+    """行为异常后二次验证（ALTCHA）请求模型."""
+
+    altcha: str = Field(..., min_length=1, description="ALTCHA 人机验证 payload")

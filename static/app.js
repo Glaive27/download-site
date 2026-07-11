@@ -34,8 +34,8 @@ let onlinePollTimer = null;
 let serverWarm = false;  // 后端是否已预热（冷启动完成后为 true）
 
 // ALTCHA 人机验证（Proof-of-Work CAPTCHA）payload 暂存区
-// 键分别对应登录 / 注册表单中的 <altcha-widget>
-const altchaStore = { login: '', register: '' };
+// 键分别对应登录 / 注册 / 行为复核表单中的 <altcha-widget>
+const altchaStore = { login: '', register: '', behavior: '' };
 
 /**
  * 绑定一个 ALTCHA 组件，监听其 statechange 事件并缓存解出的 payload。
@@ -63,6 +63,202 @@ function getAltchaPayload(formId, key) {
     const form = document.getElementById(formId);
     const input = form && form.querySelector('input[name="altcha"]');
     return input ? input.value : '';
+}
+
+/**
+ * 行为式人机认证（鼠标轨迹分析）
+ * ------------------------------------------------------------
+ * 登录后、在非登录页面持续采集鼠标移动轨迹，提取速度连续性、方向变化自然度、
+ * 机械化重复模式等特征，估算操作者为人/机器人的风险分，并定期上报后端。
+ * 全程对用户透明：不弹窗、不打断；仅当风险达到阈值（后端标记）时，下一次受保护
+ * 操作才会触发一次轻量二次验证（ALTCHA）。仅上报聚合特征，绝不发送原始坐标。
+ */
+const BehaviorMonitor = (function () {
+    const SAMPLE_INTERVAL = 50;   // 采样间隔（ms）≈ 20Hz，兼顾性能与准确性
+    const MAX_SAMPLES = 200;      // 环形缓冲上限（≈10s）
+    const REPORT_INTERVAL = 5000; // 风险上报间隔（ms）
+    const MIN_SAMPLES = 20;       // 分析所需最小样本数（样本不足不判定）
+    const MOVE_THRESHOLD = 400;   // 总位移阈值（px），过小视为未移动、不判定
+
+    let samples = [];
+    let lastT = 0;
+    let active = false;
+    let timer = null;
+
+    function onMove(e) {
+        const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
+        if (now - lastT < SAMPLE_INTERVAL) return;  // 节流
+        const x = e.clientX, y = e.clientY;
+        const prev = samples[samples.length - 1];
+        if (!prev || now - prev.t > 0) {
+            samples.push({ x, y, t: now });
+            if (samples.length > MAX_SAMPLES) samples.shift();
+            lastT = now;
+        }
+    }
+
+    function analyze() {
+        const n = samples.length;
+        if (n < MIN_SAMPLES) {
+            return { risk_score: 0, verdict: 'human', sample_count: n, features: {} };
+        }
+        const speeds = [];
+        const dirChanges = [];
+        let totalDist = 0;
+        for (let i = 1; i < n; i++) {
+            const a = samples[i - 1], b = samples[i];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const dt = b.t - a.t;
+            if (dt <= 0) continue;
+            const dist = Math.hypot(dx, dy);
+            totalDist += dist;
+            speeds.push(dist / dt);  // px/ms
+            if (i >= 2) {
+                const t1 = Math.atan2(a.y - samples[i - 2].y, a.x - samples[i - 2].x);
+                const t2 = Math.atan2(dy, dx);
+                let d = t2 - t1;
+                while (d > Math.PI) d -= 2 * Math.PI;
+                while (d < -Math.PI) d += 2 * Math.PI;
+                dirChanges.push(d);
+            }
+        }
+        if (speeds.length === 0) {
+            return { risk_score: 0, verdict: 'human', sample_count: n, features: {} };
+        }
+
+        const mean = avg(speeds);
+        const variance = avg(speeds.map(s => (s - mean) * (s - mean)));
+        const cv = mean > 0 ? Math.sqrt(variance) / mean : 0;        // 速度变异系数
+        const speedEntropy = entropy(speeds, 8);                     // 速度分布熵
+        const dirEntropy = entropy(dirChanges, 12);                  // 方向变化熵
+        const periodicity = maxAutocorr(speeds, 6);                   // 速度序列周期性
+
+        // 综合风险（保守阈值，避免误伤真人）
+        let risk = 0;
+        const movedEnough = totalDist > MOVE_THRESHOLD;
+        if (movedEnough && cv < 0.05) risk += 0.45;        // 机械式匀速
+        if (periodicity > 0.85) risk += 0.4;              // 机械化重复模式
+        if (movedEnough && dirEntropy < 0.5 && cv < 0.12) risk += 0.25; // 呆板直线+匀速
+        risk = Math.min(1, risk);
+
+        return {
+            risk_score: round3(risk),
+            verdict: risk >= 0.6 ? 'suspicious' : 'human',
+            sample_count: n,
+            features: {
+                cv: round3(cv),
+                speed_entropy: round3(speedEntropy),
+                dir_entropy: round3(dirEntropy),
+                periodicity: round3(periodicity),
+                total_dist: Math.round(totalDist),
+            },
+        };
+    }
+
+    async function report() {
+        const result = analyze();
+        const token = localStorage.getItem(TOKEN_KEY);
+        if (!token) return;
+        try {
+            await fetch('/api/behavior/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify(result),
+            });
+        } catch (e) { /* 上报失败不影响使用 */ }
+    }
+
+    function start() {
+        if (active) return;
+        if (!localStorage.getItem(TOKEN_KEY)) return;
+        active = true;
+        samples = [];
+        lastT = 0;
+        window.addEventListener('mousemove', onMove, { passive: true });
+        timer = setInterval(report, REPORT_INTERVAL);
+    }
+
+    function stop() {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('mousemove', onMove);
+        if (timer) clearInterval(timer);
+        timer = null;
+        samples = [];
+    }
+
+    return { start, stop };
+})();
+
+/**
+ * 当受保护操作因行为异常被拦截（401 BEHAVIOR_REVERIFY）时，弹出轻量二次验证。
+ * 返回一个 Promise：用户通过验证 resolve(true)，关闭/取消 resolve(false)。
+ * @returns {Promise<boolean>}
+ */
+function requestBehaviorReverify() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('behavior-modal');
+        const msg = document.getElementById('behavior-message');
+        const verifyBtn = document.getElementById('behavior-verify');
+        const closeBtn = document.getElementById('behavior-close');
+        const widget = document.getElementById('behavior-altcha');
+        msg.textContent = '';
+        msg.className = 'auth-message';
+
+        // 每次打开强制拉取一个全新挑战（避免复用旧凭证）
+        if (widget) {
+            widget.setAttribute('challenge', '/api/altcha/challenge?t=' + Date.now());
+        }
+        modal.classList.add('active');
+
+        let done = false;
+        const finish = (val) => {
+            if (done) return;
+            done = true;
+            modal.classList.remove('active');
+            verifyBtn.removeEventListener('click', onVerify);
+            closeBtn.removeEventListener('click', onClose);
+            resolve(val);
+        };
+        const onClose = () => finish(false);
+        const onVerify = async () => {
+            const payload = getAltchaPayload('behavior-modal', 'behavior');
+            if (!payload) {
+                msg.textContent = '请先完成人机验证';
+                msg.className = 'auth-message';
+                return;
+            }
+            try {
+                const res = await fetch('/api/behavior/reverify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                    },
+                    body: JSON.stringify({ altcha: payload }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ detail: '验证失败' }));
+                    msg.textContent = (err && err.detail) || '验证失败';
+                    msg.className = 'auth-message';
+                    return;
+                }
+                finish(true);
+            } catch (e) {
+                msg.textContent = '网络错误，请重试';
+                msg.className = 'auth-message';
+            }
+        };
+
+        verifyBtn.addEventListener('click', onVerify);
+        closeBtn.addEventListener('click', onClose);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) onClose();
+        });
+    });
 }
 
 /**
@@ -116,6 +312,7 @@ function getAltchaPayload(formId, key) {
     registerForm.addEventListener('submit', handleRegister);
     bindAltchaWidget('login-form', 'login');
     bindAltchaWidget('register-form', 'register');
+    bindAltchaWidget('behavior-modal', 'behavior');
     createSeriesForm.addEventListener('submit', handleCreateSeries);
     uploadFileForm.addEventListener('submit', handleUploadFile);
 })();
@@ -233,6 +430,7 @@ function bindAdminFileActions() {
 /**
  * 绑定文件下载按钮：登录用户点击下载时，异步上报一次下载行为（用于账号历史统计）。
  * 上报为 fire-and-forget，不阻塞原生文件下载（GET /download 仍负责实际传输与总量统计）。
+ * 若用户被行为认证标记为异常，authFetch 会自动弹出二次验证并在通过后重试上报。
  * 匿名用户不调用本接口，因此账号历史仅记录登录后的下载。
  */
 function bindDownloadTracking() {
@@ -242,9 +440,8 @@ function bindDownloadTracking() {
             if (!token) return;  // 匿名：直接走原生下载，不上报
             const filename = btn.dataset.filename;
             if (!filename) return;
-            fetch(`/api/download-log/${encodeURIComponent(filename)}`, {
+            authFetch(`/api/download-log/${encodeURIComponent(filename)}`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
             }).catch(() => { /* 统计失败不影响下载 */ });
         });
     });
@@ -346,9 +543,7 @@ async function fetchStats() {
     if (!token) return;
 
     try {
-        const response = await fetch('/api/admin/stats', {
-            headers: { 'Authorization': `Bearer ${token}` },
-        });
+        const response = await authFetch('/api/admin/stats');
         if (!response.ok) {
             throw new Error('获取统计数据失败');
         }
@@ -471,9 +666,8 @@ async function openUserHistory(username) {
     setHistoryLoading();
 
     try {
-        const res = await fetch(
+        const res = await authFetch(
             `/api/admin/users/${encodeURIComponent(username)}/downloads?order=${historyOrder}`,
-            { headers: { 'Authorization': `Bearer ${token}` } },
         );
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '获取下载记录失败' }));
@@ -771,7 +965,39 @@ function authFetch(url, options = {}) {
 
     options.headers = options.headers || {};
     options.headers['Authorization'] = `Bearer ${token}`;
-    return fetch(url, options);
+    return handleBehaviorChallenge(fetch(url, options), url, options);
+}
+
+/**
+ * 包装一次 fetch Promise：若返回 401 且为行为验证异常（BEHAVIOR_REVERIFY），
+ * 弹出轻量二次验证（ALTCHA），用户通过后再自动重试一次原请求。
+ * 对用户透明：仅在被判定为异常时才出现，正常操作无感。
+ * @param {Promise<Response>} responsePromise
+ * @param {string} url
+ * @param {object} options
+ * @returns {Promise<Response>}
+ */
+async function handleBehaviorChallenge(responsePromise, url, options) {
+    const res = await responsePromise;
+    if (res.status === 401) {
+        let detail = '';
+        try {
+            const data = await res.json();
+            detail = (data && data.detail) || '';
+        } catch (e) { /* 非 JSON 响应，忽略 */ }
+        if (typeof detail === 'string' && detail.startsWith('BEHAVIOR_REVERIFY')) {
+            const verified = await requestBehaviorReverify();
+            if (verified) {
+                // 重新发起原请求（带最新 token）
+                const token = localStorage.getItem(TOKEN_KEY);
+                const opts = options || {};
+                opts.headers = opts.headers || {};
+                opts.headers['Authorization'] = `Bearer ${token}`;
+                return fetch(url, opts);
+            }
+        }
+    }
+    return res;
 }
 
 /**
@@ -823,6 +1049,13 @@ function updateAuthUI() {
 
     updateAdminPanel();
     updateOnlineBadge();
+
+    // 行为式人机认证：登录后开始采集轨迹，登出后停止
+    if (userJson) {
+        BehaviorMonitor.start();
+    } else {
+        BehaviorMonitor.stop();
+    }
 }
 
 /**
@@ -974,6 +1207,83 @@ function showToast(message, isError = false) {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+}
+
+/**
+ * 行为分析用数值工具（函数声明，已提升，可在 BehaviorMonitor 中直接调用）
+ */
+function avg(arr) {
+    if (!arr.length) return 0;
+    let s = 0;
+    for (const v of arr) s += v;
+    return s / arr.length;
+}
+
+function round3(n) {
+    return Math.round(n * 1000) / 1000;
+}
+
+/**
+ * 计算序列的直方图熵（以 2 为底），衡量取值的多样性。
+ * 人类轨迹特征多样 → 熵高；机械化重复 → 熵低（趋近 0）。
+ * @param {number[]} arr
+ * @param {number} buckets
+ * @returns {number}
+ */
+function entropy(arr, buckets) {
+    if (!arr.length) return 0;
+    let min = Infinity, max = -Infinity;
+    for (const v of arr) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+    }
+    if (min === max) return 0;  // 全部相同 → 无信息量
+    const counts = new Array(buckets).fill(0);
+    for (const v of arr) {
+        let idx = Math.floor(((v - min) / (max - min)) * buckets);
+        if (idx >= buckets) idx = buckets - 1;
+        if (idx < 0) idx = 0;
+        counts[idx]++;
+    }
+    let e = 0;
+    for (const c of counts) {
+        if (c === 0) continue;
+        const p = c / arr.length;
+        e -= p * Math.log2(p);
+    }
+    return e;
+}
+
+/**
+ * 计算序列在指定滞后下的皮尔逊自相关系数（检测周期性/重复模式）。
+ * @param {number[]} arr
+ * @param {number} lag
+ * @returns {number}
+ */
+function autocorr(arr, lag) {
+    const n = arr.length;
+    if (n <= lag + 1) return 0;
+    const a = arr.slice(0, n - lag);
+    const b = arr.slice(lag);
+    const ma = avg(a), mb = avg(b);
+    let num = 0, da = 0, db = 0;
+    for (let i = 0; i < a.length; i++) {
+        const va = a[i] - ma, vb = b[i] - mb;
+        num += va * vb;
+        da += va * va;
+        db += vb * vb;
+    }
+    if (da === 0 || db === 0) return 0;
+    return num / Math.sqrt(da * db);
+}
+
+function maxAutocorr(arr, maxLag) {
+    let m = 0;
+    for (let lag = 1; lag <= maxLag; lag++) {
+        const c = Math.abs(autocorr(arr, lag));
+        if (c > m) m = c;
+    }
+    return m;
 }
 
 /**
