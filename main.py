@@ -13,6 +13,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, List
+from urllib.parse import quote
 
 import logging
 from dotenv import load_dotenv
@@ -354,15 +355,6 @@ async def delete_file(
     if not record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    if r2_enabled():
-        try:
-            delete_object(record.object_key)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"删除对象失败: {exc}",
-            ) from exc
-
     db.delete(record)
     db.commit()
     return JSONResponse({"message": f"文件 {filename} 已删除"})
@@ -382,16 +374,31 @@ async def download_file(
         raise HTTPException(status_code=404, detail="文件不存在")
 
     if not record.file_data:
-        raise HTTPException(status_code=404, detail="文件内容不存在")
+        # 历史遗留记录（R2 时代 / 部署崩溃期上传）可能未存储内容
+        raise HTTPException(
+            status_code=404,
+            detail="文件内容不存在（可能是历史旧记录，请重新上传该文件）",
+        )
 
     # 累加下载量（用于数据记录统计）
     record.download_count = (record.download_count or 0) + 1
     db.commit()
 
+    # 兼容 PostgreSQL BYTEA 读回的 memoryview，统一转为 bytes 避免 500
+    content = bytes(record.file_data)
+
+    # 下载保存名优先使用原始文件名（如 123.zip / 实例.zip），而非内部版本名
+    download_name = record.original_filename or filename
+    ascii_name = re.sub(r'[^\x20-\x7e]', '_', download_name)
+    disp = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(download_name)}"
+    )
+
     return Response(
-        content=record.file_data,
-        media_type=record.file_mime,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        content=content,
+        media_type=record.file_mime or "application/octet-stream",
+        headers={"Content-Disposition": disp},
     )
 
 
