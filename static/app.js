@@ -1359,6 +1359,8 @@ function renderStats(data) {
     document.getElementById('stats-total-downloads').textContent = data.total_downloads;
     document.getElementById('stats-total-visitors').textContent = data.total_visitors;
 
+    renderQuota(data);
+
     const filesBox = document.getElementById('stats-files');
     if (!Array.isArray(data.files) || data.files.length === 0) {
         filesBox.innerHTML = '<div class="stats-empty">暂无文件下载记录</div>';
@@ -1429,6 +1431,57 @@ function renderStats(data) {
             });
         });
     }
+}
+
+/**
+ * 将字节数格式化为易读文本（自动选择 KB / MB / GB）
+ * @param {number} bytes
+ * @returns {string}
+ */
+function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const val = bytes / Math.pow(1024, i);
+    const fixed = i === 0 ? 0 : (val >= 100 || Number.isInteger(val) ? 0 : 1);
+    return `${val.toFixed(fixed)} ${units[i]}`;
+}
+
+/**
+ * 渲染数据库额度进度条
+ * @param {object} data - /api/admin/stats 返回的数据（含 db_size_bytes / db_quota_bytes）
+ */
+function renderQuota(data) {
+    const usedEl = document.getElementById('quota-used');
+    const remainingEl = document.getElementById('quota-remaining');
+    const fillEl = document.getElementById('quota-bar-fill');
+    const hintEl = document.getElementById('quota-hint');
+    if (!usedEl || !remainingEl || !fillEl || !hintEl) return;
+
+    const used = Number(data.db_size_bytes) || 0;
+    const quota = Number(data.db_quota_bytes) || 0;
+
+    usedEl.textContent = formatBytes(used);
+
+    if (quota <= 0) {
+        // 未配置额度：仅显示已用空间，不画进度比例
+        remainingEl.textContent = '未配置额度';
+        fillEl.style.width = '0%';
+        hintEl.textContent = used > 0 ? `当前数据库占用 ${formatBytes(used)}` : '暂无额度信息';
+        return;
+    }
+
+    const remaining = Math.max(0, quota - used);
+    const pct = Math.min(100, (used / quota) * 100);
+    remainingEl.textContent = formatBytes(remaining);
+    fillEl.style.width = `${pct}%`;
+
+    // 用量越高颜色越警示：<70% 正常（accent）/ <90% 警告（橙）/ >=90% 危险（红）
+    fillEl.classList.remove('warn', 'danger');
+    if (pct >= 90) fillEl.classList.add('danger');
+    else if (pct >= 70) fillEl.classList.add('warn');
+
+    hintEl.textContent = `已使用 ${(quota ? (used / quota * 100) : 0).toFixed(1)}% / 总额度 ${formatBytes(quota)}`;
 }
 
 /**

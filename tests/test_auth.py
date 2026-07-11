@@ -942,3 +942,42 @@ class TestInactiveAccountSweep:
         assert resp.status_code == 200
         db_session.refresh(u)
         assert u.download_count == 1
+
+
+class TestAdminStatsQuota:
+    """管理员数据记录：数据库额度进度条所需字段."""
+
+    def _admin_token(self, client: TestClient) -> str:
+        resp = client.post(
+            "/auth/login",
+            data={"username": "Glaive", "password": "19866179818", "altcha": altcha_payload()},
+        )
+        return resp.json()["access_token"]
+
+    def test_stats_includes_quota_fields(self, client: TestClient, admin_user: User):
+        """/api/admin/stats 应返回 db_size_bytes 与 db_quota_bytes."""
+        token = self._admin_token(client)
+        resp = client.get(
+            "/api/admin/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "db_size_bytes" in data
+        assert "db_quota_bytes" in data
+        assert isinstance(data["db_size_bytes"], int)
+        assert isinstance(data["db_quota_bytes"], int)
+        # 测试用 SQLite 库占用空间应 >= 0
+        assert data["db_size_bytes"] >= 0
+
+    def test_stats_quota_requires_admin(self, client: TestClient, normal_user: User):
+        """普通用户访问 /api/admin/stats 应被 403 拒绝."""
+        token = client.post(
+            "/auth/login",
+            data={"username": "testuser", "password": "testpass123", "altcha": altcha_payload()},
+        ).json()["access_token"]
+        resp = client.get(
+            "/api/admin/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403

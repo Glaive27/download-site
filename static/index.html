@@ -218,6 +218,24 @@
                 </section>
 
                 <section class="stats-section">
+                    <h3 class="stats-section-title">数据库额度</h3>
+                    <div class="quota-card">
+                        <div class="quota-row">
+                            <span class="quota-label">已用空间</span>
+                            <span class="quota-used" id="quota-used">—</span>
+                        </div>
+                        <div class="quota-row">
+                            <span class="quota-label">剩余额度</span>
+                            <span class="quota-remaining" id="quota-remaining">—</span>
+                        </div>
+                        <div class="quota-bar">
+                            <span class="quota-bar-fill" id="quota-bar-fill" style="width:0%"></span>
+                        </div>
+                        <span class="quota-hint" id="quota-hint">加载中…</span>
+                    </div>
+                </section>
+
+                <section class="stats-section">
                     <h3 class="stats-section-title">注册账号（<span id="stats-user-count">0</span>）</h3>
                     <ul class="stats-users" id="stats-users"></ul>
                 </section>

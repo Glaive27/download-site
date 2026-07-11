@@ -49,8 +49,36 @@ ACCOUNT_DELETE_DAYS = int(os.environ.get("ACCOUNT_DELETE_DAYS", "10"))
 # 后台清理任务的扫描间隔（秒），默认 1 小时扫描一次
 ACCOUNT_SWEEP_INTERVAL_SECONDS = int(os.environ.get("ACCOUNT_SWEEP_INTERVAL_SECONDS", "3600"))
 
+# 数据库存储额度（字节）：用于「数据记录」弹窗展示剩余空间进度条。
+# Render 免费 PostgreSQL 实例磁盘上限为 1 GB；若使用更高套餐请相应调大。
+# 该值仅用于前端展示剩余额度，不影响数据库实际写入（由数据库自身限制）。
+DATABASE_QUOTA_BYTES = int(os.environ.get("DATABASE_QUOTA_BYTES", str(1024 * 1024 * 1024)))
+
 
 logger = logging.getLogger(__name__)
+
+
+def get_database_size_bytes(session: Session) -> int:
+    """返回当前数据库已占用空间（字节）.
+
+    - PostgreSQL：使用 ``pg_database_size(current_database())`` 获取整库大小。
+    - SQLite：返回数据库文件在磁盘上的大小（文件型存储）。
+    - 其它 / 异常：返回 0（额度进度条退化为「未知」显示）。
+    """
+    try:
+        dialect = engine.dialect.name
+        if dialect == "postgresql":
+            return int(session.execute(
+                text("SELECT pg_database_size(current_database())")
+            ).scalar() or 0)
+        if dialect == "sqlite":
+            db_path = engine.url.database
+            if db_path and os.path.exists(db_path):
+                return os.path.getsize(db_path)
+    except Exception:  # noqa: BLE001 - 额度探测失败不应影响主流程
+        logger.exception("获取数据库大小失败，将按 0 处理")
+    return 0
+
 
 
 @asynccontextmanager
@@ -824,6 +852,7 @@ async def admin_stats(
     - 总下载量
     - 总访问人数（累计独立访客，去重）
     - 已注册账号列表（仅用户名与角色，不含密码）
+    - 数据库已用空间与额度（`db_size_bytes` / `db_quota_bytes`）
     """
     records = db.query(FileRecord).all()
     total_downloads = sum(r.download_count or 0 for r in records)
@@ -855,11 +884,16 @@ async def admin_stats(
         for u in db.query(User).order_by(User.id).all()
     ]
 
+    db_size_bytes = get_database_size_bytes(db)
+    db_quota_bytes = DATABASE_QUOTA_BYTES
+
     return JSONResponse({
         "files": files,
         "total_downloads": total_downloads,
         "total_visitors": total_visitors,
         "users": users,
+        "db_size_bytes": db_size_bytes,
+        "db_quota_bytes": db_quota_bytes,
     })
 
 

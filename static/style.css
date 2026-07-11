@@ -1206,6 +1206,69 @@ body {
     min-width: 2px;
 }
 
+/* ===== 数据库额度进度条 ===== */
+.quota-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+}
+
+.quota-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.85rem;
+}
+
+.quota-label {
+    color: var(--muted);
+}
+
+.quota-used {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.quota-remaining {
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.quota-bar {
+    position: relative;
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.quota-bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), #818cf8);
+    min-width: 2px;
+    transition: width 0.4s ease;
+}
+
+.quota-bar-fill.warn {
+    background: linear-gradient(90deg, #fbbf24, #f59e0b);
+}
+
+.quota-bar-fill.danger {
+    background: linear-gradient(90deg, #f87171, #ef4444);
+}
+
+.quota-hint {
+    font-size: 0.72rem;
+    color: var(--muted);
+}
+
 .stats-file-ratio {
     font-size: 0.72rem;
     color: var(--muted);

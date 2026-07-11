@@ -47,6 +47,10 @@ services:
         value: "10"
       - key: ACCOUNT_SWEEP_INTERVAL_SECONDS
         value: "3600"
+      # 数据库存储额度（字节）：用于「数据记录」弹窗展示剩余空间进度条
+      # Render 免费 PostgreSQL 实例磁盘上限为 1 GB；使用更高套餐请相应调大
+      - key: DATABASE_QUOTA_BYTES
+        value: "1073741824"
 
 databases:
   - name: download-site-db
