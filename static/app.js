@@ -373,17 +373,6 @@ const MouseTrajectoryVerifier = (function () {
     let finalized = false;
     let pendingResult = null;
 
-    // ---- 自动后台检测模式：登录后于网站内持续采集鼠标轨迹并判定，无需按钮触发 ----
-    let autoActive = false;
-    let autoPoints = [];
-    let autoLastT = 0;
-    let autoTimer = null;
-    let autoState = 'collecting';   // collecting | human | bot
-    let autoStable = 0;
-    let autoLastConf = -1;
-    let autoBadge = null;
-    let autoBadgeText = null;
-
     function initDom() {
         canvas = document.getElementById('traj-canvas');
         if (canvas) ctx = canvas.getContext('2d');
@@ -396,6 +385,181 @@ const MouseTrajectoryVerifier = (function () {
         confirmHint = document.getElementById('traj-confirm-hint');
         if (retryBtn) retryBtn.addEventListener('click', reset);
         if (confirmBtn) confirmBtn.addEventListener('click', onConfirm);
+    }
+
+    // ===== 持续自动后台检测（登录后永不停止，滑动窗口循环判定） =====
+    // 设计原则：非一次性——用户验证通过后若行为转为机器人化，必须立即重新捕获。
+    // 每次评估仅使用最近一段时间的轨迹数据（环形缓冲即天然滑动窗口），
+    // 无终态机，始终在 human / observing / bot 三区间内持续循环判定。
+    let autoActive = false;
+    let autoPoints = [];
+    let autoLastT = 0;
+    let autoTimer = null;
+
+    // 持续检测的区间与稳定性计数器
+    const BOT_THRESHOLD = 0.35;       // 低于此且连续稳定 → 判定机器人
+    const AUTO_STABLE = 4;            // 连续 N 轮处于同一区间才切换标记状态
+    const AUTO_REPORT_MS = 8000;      // 风险上报间隔(ms)
+    let autoHumanStreak = 0;          // 连续 ≥ HUMAN_THRESHOLD 的轮数
+    let autoBotStreak = 0;            // 连续 ≤ BOT_THRESHOLD 的轮数
+    let autoLastReportTime = 0;
+
+    function autoOnMove(e) {
+        if (!autoActive) return;
+        if (e.isTrusted === false) return;  // 过滤自动化脚本注入的合成事件
+        const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
+        if (now - autoLastT < SAMPLE_MIN_INTERVAL) return;  // 节流 ≈ 30Hz
+        autoPoints.push({ x: e.clientX, y: e.clientY, t: now });
+        if (autoPoints.length > MAX_POINTS) autoPoints.shift();  // 环形缓冲 = 滑动窗口
+        autoLastT = now;
+    }
+
+    /**
+     * 尝试清除行为标记：前端判定为真人时调用。
+     * 仅当当前确实被标记时才请求后端清标记（避免无效请求）。
+     */
+    async function tryClearBehaviorFlag(f, conf) {
+        if (!behaviorFlagged) return;
+        try {
+            const res = await fetch('/api/behavior/reverify_trajectory', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                },
+                body: JSON.stringify({ verdict: 'human', confidence: conf, samples: f.n, features: f }),
+            });
+            if (res.ok) behaviorFlagged = false;
+        } catch (_) { /* 网络异常不影响前台持续检测 */ }
+    }
+
+    /**
+     * 标记为机器人并上报：前端持续判定为机器人时调用。
+     * 标记后后续受保护操作会自动触发二次验证弹窗。
+     */
+    async function tryFlagAsBot(f, conf) {
+        if (behaviorFlagged) return;  // 已标记则跳过重复上报
+        behaviorFlagged = true;
+        try {
+            await fetch('/api/behavior/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                },
+                body: JSON.stringify({
+                    risk_score: Math.max(0.6, conf),
+                    verdict: 'suspicious',
+                    sample_count: f.n,
+                    features: f,
+                }),
+            });
+        } catch (_) { /* 网络异常不影响前台标记 */ }
+    }
+
+    /**
+     * 定期向后端上报当前风险分数（用于服务端记录和趋势分析）。
+     * 不改变标记状态，仅做数据同步。
+     */
+    async function reportAutoRisk(conf, f) {
+        if (!localStorage.getItem(TOKEN_KEY)) return;
+        try {
+            await fetch('/api/behavior/report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
+                },
+                body: JSON.stringify({
+                    risk_score: round3(1 - conf),   // 置信度的补数作为风险分
+                    verdict: conf >= HUMAN_THRESHOLD ? 'human' : 'suspicious',
+                    sample_count: f.n,
+                    features: f,
+                }),
+            });
+        } catch (_) { /* 上报失败不阻断 */ }
+    }
+
+    /**
+     * 核心：持续滑动窗口判定（每次 tick 都用最新窗口数据重算，无终态）。
+     *
+     * 区间划分：
+     *   conf ≥ HUMAN_THRESHOLD(0.6) → human 区间 → 稳定后尝试清标记
+     *   conf ≤ BOT_THRESHOLD(0.35)  → bot 区间   → 稳定后标记+上报
+     *   其余                       → observing  → 不变更标记状态（保持现状）
+     *
+     * 关键特性：
+     * - 即使之前判过 human，只要后续窗口持续落入 bot 区间就立刻标 bot；
+     * - 即使之前判过 bot，只要后续窗口持续落入 human 区间就尝试清标记；
+     * - 从不停止采集和判定，登录期间全程有效。
+     */
+    function autoTick() {
+        if (!autoActive) return;
+
+        const f = computeFeatures(autoPoints);
+        const conf = f ? humanConfidence(f) : 0;
+
+        // 数据不足不判定（但继续采集）
+        if (!f || f.n < MIN_POINTS || f.totalDist < MIN_PATH) {
+            autoHumanStreak = 0;
+            autoBotStreak = 0;
+            return;
+        }
+
+        // 三区间持续判定
+        if (conf >= HUMAN_THRESHOLD) {
+            // 落入 human 区间
+            autoBotStreak = 0;
+            autoHumanStreak++;
+            if (autoHumanStreak >= AUTO_STABLE) {
+                // 连续足够多轮都是人类特征 → 确认真人，尝试清标记
+                tryClearBehaviorFlag(f, conf);
+                autoHumanStreak = 0;  // 重置但保持监测（不清除 autoActive）
+            }
+        } else if (conf <= BOT_THRESHOLD) {
+            // 落入 bot 区间
+            autoHumanStreak = 0;
+            autoBotStreak++;
+            if (autoBotStreak >= AUTO_STABLE) {
+                // 连续足够多轮都是机器人特征 → 确认机器人，标记+上报
+                tryFlagAsBot(f, conf);
+                autoBotStreak = 0;  // 重置但保持监测
+            }
+        } else {
+            // 观察区间（BOT_THRESHOLD < conf < HUMAN_THRESHOLD）
+            // 特征不明显，维持当前标记状态不变，重置两边 streak
+            autoHumanStreak = 0;
+            autoBotStreak = 0;
+        }
+
+        // 定期上报风险分数给后端（用于趋势分析和服务端兜底）
+        const now = Date.now();
+        if (now - autoLastReportTime >= AUTO_REPORT_MS) {
+            autoLastReportTime = now;
+            reportAutoRisk(conf, f);
+        }
+    }
+
+    function beginAuto() {
+        if (autoActive) return;
+        if (!localStorage.getItem(TOKEN_KEY)) return;  // 仅登录用户启用
+        autoActive = true;
+        autoPoints = [];
+        autoLastT = 0;
+        autoHumanStreak = 0;
+        autoBotStreak = 0;
+        autoLastReportTime = Date.now();
+        document.addEventListener('pointermove', autoOnMove, { passive: true });
+        autoTimer = setInterval(autoTick, 300);  // 每 300ms 用滑动窗口数据重判一次
+    }
+
+    function endAuto() {
+        if (!autoActive) return;
+        autoActive = false;
+        document.removeEventListener('pointermove', autoOnMove);
+        if (autoTimer) clearInterval(autoTimer);
+        autoTimer = null;
+        autoPoints = [];  // 释放缓冲区
     }
 
     function sizeCanvas() {
@@ -695,125 +859,6 @@ const MouseTrajectoryVerifier = (function () {
         const closeBtn = document.getElementById('traj-close');
         if (closeBtn) closeBtn.addEventListener('click', cancel, { once: true });
         if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) cancel(); }, { once: true });
-    }
-
-    // ===== 自动后台检测模式（登录后启用，全程无需按钮） =====
-    function initBadge() {
-        autoBadge = document.getElementById('traj-live');
-        autoBadgeText = document.getElementById('traj-live-text');
-    }
-
-    function updateBadge(state, text) {
-        if (!autoBadge || !autoBadgeText) return;
-        autoBadge.className = 'traj-live ' + state;
-        autoBadgeText.textContent = text;
-    }
-
-    function autoOnMove(e) {
-        if (!autoActive) return;
-        if (e.isTrusted === false) return;  // 过滤自动化脚本注入的合成事件
-        const now = (e.timeStamp && e.timeStamp > 0) ? e.timeStamp : performance.now();
-        if (now - autoLastT < SAMPLE_MIN_INTERVAL) return;  // 节流 ≈ 30Hz
-        autoPoints.push({ x: e.clientX, y: e.clientY, t: now });
-        if (autoPoints.length > MAX_POINTS) autoPoints.shift();
-        autoLastT = now;
-    }
-
-    async function enterHuman(f, conf) {
-        autoState = 'human';
-        autoStable = 0;
-        updateBadge('human', '✅ 已验证真人');
-        if (behaviorFlagged) {
-            // 已被标记则自动清除（前端判定为真人即通过二次验证）
-            try {
-                const res = await fetch('/api/behavior/reverify_trajectory', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
-                    },
-                    body: JSON.stringify({ verdict: 'human', confidence: conf, samples: f.n, features: f }),
-                });
-                if (res.ok) behaviorFlagged = false;
-            } catch (e) { /* 网络异常不影响前台判定 */ }
-        }
-    }
-
-    async function enterBot(f, conf) {
-        autoState = 'bot';
-        autoStable = 0;
-        updateBadge('bot', '🤖 疑似自动化脚本');
-        behaviorFlagged = true;  // 标记后，后续受保护操作将自动触发二次验证弹窗
-        try {
-            await fetch('/api/behavior/report', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`,
-                },
-                body: JSON.stringify({
-                    risk_score: Math.max(0.6, conf),
-                    verdict: 'suspicious',
-                    sample_count: f.n,
-                    features: f,
-                }),
-            });
-        } catch (e) { /* 网络异常不影响前台判定 */ }
-    }
-
-    function autoTick() {
-        if (!autoActive) return;
-        const f = computeFeatures(autoPoints);
-        const conf = f ? humanConfidence(f) : 0;
-        const pct = Math.round(conf * 100);
-        if (autoState === 'human') {
-            updateBadge('human', '✅ 已验证真人');
-        } else if (autoState === 'bot') {
-            updateBadge('bot', '🤖 疑似自动化脚本');
-        } else {
-            updateBadge('collecting', (f && f.n >= 3) ? `验证中 ${pct}%` : '验证中…');
-        }
-        if (!f || f.n < MIN_POINTS || f.totalDist < MIN_PATH) { autoStable = 0; return; }
-        if (autoState === 'collecting') {
-            if (conf >= HUMAN_THRESHOLD) {
-                if (++autoStable >= CONF_STABLE_ROUNDS) enterHuman(f, conf);
-            } else if (conf <= 0.4) {
-                if (++autoStable >= CONF_STABLE_ROUNDS) enterBot(f, conf);
-            } else {
-                autoStable = 0;
-            }
-        } else if (autoState === 'human') {
-            // 若轨迹特征明显转为机器人化，则重新评估
-            if (conf <= 0.45) {
-                if (++autoStable >= CONF_STABLE_ROUNDS) { autoState = 'collecting'; autoStable = 0; }
-            } else {
-                autoStable = 0;
-            }
-        }
-    }
-
-    function beginAuto() {
-        if (autoActive) return;
-        if (!localStorage.getItem(TOKEN_KEY)) return;  // 仅登录用户启用
-        autoActive = true;
-        autoState = 'collecting';
-        autoStable = 0;
-        autoLastT = 0;
-        autoPoints = [];
-        initBadge();
-        if (autoBadge) autoBadge.classList.remove('hidden');
-        updateBadge('collecting', '验证中…');
-        document.addEventListener('pointermove', autoOnMove, { passive: true });
-        autoTimer = setInterval(autoTick, 300);
-    }
-
-    function endAuto() {
-        if (!autoActive) return;
-        autoActive = false;
-        document.removeEventListener('pointermove', autoOnMove);
-        if (autoTimer) clearInterval(autoTimer);
-        autoTimer = null;
-        if (autoBadge) autoBadge.classList.add('hidden');
     }
 
     return { open, close: cleanup, beginAuto, endAuto };
