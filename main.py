@@ -995,7 +995,7 @@ async def admin_active_users(
 
 @app.get("/api/admin/stats")
 async def admin_stats(
-    current_user: Annotated[User, Depends(require_behavior_ok_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
     """管理员专用：返回数据记录统计.
@@ -1054,7 +1054,7 @@ async def admin_stats(
 @app.get("/api/admin/users/{username}/downloads")
 async def user_download_history(
     username: str,
-    current_user: Annotated[User, Depends(require_behavior_ok_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
     order: str = "desc",
 ) -> JSONResponse:
