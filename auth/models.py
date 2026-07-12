@@ -32,13 +32,15 @@ class User(Base):  # noqa: D101
     # last_login    —— 最近一次成功登录时间（注册时取注册时间）；用于判定「上线」间隔
     # download_count —— 该账号累计下载文件次数（0 表示从未下载过文件）
     # high_risk     —— 高危标记：注册后从未下载、且超过 ACCOUNT_RISK_DAYS 天未上线时被置位
-    # last_login_ip      —— 最近一次登录/注册的 IP 地址（管理员可见）
-    # last_login_location —— IP 解析后的地理位置（如"中国·广州"，管理员可见）
+    # last_login_ip      —— 最近一次检测到的 IP 地址（管理员可见，实时刷新）
+    # last_login_location —— IP 解析后的地理位置（如"中国·广州"，管理员可见，实时刷新）
+    # last_ip_check_at   —— 上次检测 IP 的时间，用于节流（避免频繁请求解析接口）
     last_login = Column(DateTime, default=_utcnow, nullable=False)
     download_count = Column(Integer, default=0, nullable=True)
     high_risk = Column(Boolean, default=False, nullable=False)
     last_login_ip = Column(String(64), nullable=True)
     last_login_location = Column(String(128), nullable=True)
+    last_ip_check_at = Column(DateTime, nullable=True)
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<User(id={self.id}, username={self.username}, role={self.role})>"

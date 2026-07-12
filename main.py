@@ -29,7 +29,7 @@ from sqlalchemy import text
 load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
-from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User
+from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User, _utcnow
 from auth.schemas import BehaviorReport, BehaviorReverify, TrajectoryVerdict
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
@@ -89,6 +89,7 @@ from urllib.error import URLError
 
 _IP_GEO_CACHE: dict[str, str] = {}   # IP → "国家·城市" 缓存，避免重复请求
 _IP_GEO_CACHE_TTL = 3600             # 缓存有效期（秒）
+_IP_REFRESH_INTERVAL = 120          # 同一 IP 两次解析之间的最小间隔（秒），用于节流
 
 
 def _get_client_ip(request: Request) -> str | None:
@@ -107,7 +108,7 @@ def _resolve_ip_location(ip: str) -> str:
     使用免费接口 ip-api.com（中文模式），结果缓存 1 小时。
     解析失败时返回空字符串（不影响主流程）。
     """
-    if not ip or ip in ("127.0.0.1", "::1", "localhost"):
+    if not ip or ip in ("127.0.0.1", "::1", "localhost", "testclient"):
         return "本地"
 
     cached = _IP_GEO_CACHE.get(ip)
@@ -139,6 +140,42 @@ def _record_user_ip(user: User, request: Request, db: Session) -> None:
     ip = _get_client_ip(request)
     user.last_login_ip = ip
     user.last_login_location = _resolve_ip_location(ip) if ip else None
+    user.last_ip_check_at = _utcnow()
+    db.commit()
+
+
+def refresh_user_location(user: User, request: Request, db: Session) -> None:
+    """实时刷新用户 IP 归属地（由会话状态轮询周期性调用）.
+
+    - 每次都检测当前 IP。
+    - IP 发生变化（如切换 VPN）→ 立即重新解析并记录。
+    - IP 未变 → 仅在距上次解析超过 ``_IP_REFRESH_INTERVAL`` 时才重新解析，
+      避免对解析接口造成频繁请求（ip-api 免费版限 45 次/分钟）。
+    解析失败时静默跳过，不影响主流程。
+    """
+    ip = _get_client_ip(request)
+    if not ip:
+        return
+
+    now = _utcnow()
+    last_check = user.last_ip_check_at
+    # IP 未变化且距上次检测不足节流间隔 → 跳过
+    if ip == user.last_login_ip and last_check is not None:
+        elapsed = (now - last_check).total_seconds()
+        if elapsed < _IP_REFRESH_INTERVAL:
+            return
+
+    # IP 变了（或首次/超时）：重新解析。_resolve_ip_location 内部有 1h 结果缓存，
+    # 对已经解析过的 IP 会直接命中缓存，不发起网络请求。
+    location = _resolve_ip_location(ip)
+    # 重新在 db 会话中加载用户对象（current_user 属于 get_current_user 的独立会话，
+    # 直接修改它再 db.commit() 不会持久化），确保在正确的会话中写入。
+    db_user = db.query(User).filter_by(id=user.id).first()
+    if db_user is None:
+        return
+    db_user.last_login_ip = ip
+    db_user.last_login_location = location or None
+    db_user.last_ip_check_at = now
     db.commit()
 
 
@@ -648,7 +685,9 @@ async def behavior_reverify_trajectory(
 
 @app.get("/api/session/status")
 async def session_status(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
     """会话状态探针（已登录用户定期轮询）.
 
@@ -656,7 +695,14 @@ async def session_status(
     - 账号被管理员删除后，``get_current_user`` 因用户不存在而返回 401，
       前端轮询到 401 即弹出「异常行为检测」提示并强制登出（数秒内生效）。
     - 正常返回 ``{valid, flagged}``：``flagged`` 表示是否因行为异常需复核。
+    - 每次轮询实时刷新用户 IP 归属地（切换 VPN 后数秒内即可在管理员界面看到变化）。
     """
+    # 实时刷新 IP 归属地（内部带节流，不会频繁请求解析接口）
+    try:
+        refresh_user_location(current_user, request, db)
+    except Exception:  # noqa: BLE001 - IP 刷新失败绝不影响主流程
+        logger.exception("实时刷新 IP 归属地失败（已忽略）")
+
     return JSONResponse({
         "valid": True,
         "flagged": bool(current_user.behavior_flagged),
