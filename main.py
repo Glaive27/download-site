@@ -410,6 +410,23 @@ async def index() -> str:
     return index_path.read_text(encoding="utf-8")
 
 
+@app.get("/api/health")
+async def health_check(db: Annotated[Session, Depends(get_db)]) -> JSONResponse:
+    """轻量级健康检查 + 保活探针.
+
+    - 执行一次极轻的数据库查询（SELECT 1），用于在免费实例休眠后
+      顺带唤醒数据库，避免首个真实请求才触发漫长的冷启动。
+    - 被外部监控（如 UptimeRobot）或定时任务周期ping时，可让 Web 与
+      数据库都保持活跃，从而让用户（含手机端）随时访问都即时可用。
+    """
+    try:
+        db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:  # noqa: BLE001
+        db_ok = False
+    return JSONResponse({"status": "ok", "db": db_ok})
+
+
 @app.get("/files")
 async def list_files(
     db: Annotated[Session, Depends(get_db)],
