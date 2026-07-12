@@ -1110,10 +1110,18 @@ function renderFiles(files) {
             </div>
             <div class="versions-grid">
                 ${group.versions.map(file => `
-                    <article class="file-card">
+                    <article class="file-card" data-filename="${escapeHtml(file.name)}">
                         <div class="file-info">
                             <span class="file-name">${escapeHtml(file.version)}</span>
                             <span class="file-size">${escapeHtml(file.size)}</span>
+                            ${file.description ? `<span class="file-desc" title="${escapeHtml(file.description)}">${escapeHtml(file.description)}</span>` : ''}
+                            ${isAdmin ? `
+                                <div class="file-desc-edit" style="display:none;">
+                                    <input type="text" class="file-desc-input" placeholder="输入文件简介…" maxlength="512" value="${escapeHtml(file.description || '')}">
+                                    <button class="file-desc-save btn btn-primary">保存</button>
+                                    <button class="file-desc-cancel btn">取消</button>
+                                </div>
+                            ` : ''}
                         </div>
                         <div class="file-actions">
                             <a class="download-btn" href="/download/${encodeURIComponent(file.name)}" download data-filename="${escapeHtml(file.name)}">
@@ -1125,6 +1133,9 @@ function renderFiles(files) {
                             ${isAdmin ? `
                                 <button class="btn btn-danger delete-file-btn" data-series="${escapeHtml(group.series)}" data-filename="${escapeHtml(file.name)}">
                                     删除
+                                </button>
+                                <button class="btn btn-edit-desc" data-series="${escapeHtml(group.series)}" data-filename="${escapeHtml(file.name)}" title="编辑简介">
+                                    ✎ 简介
                                 </button>
                             ` : ''}
                         </div>
@@ -1158,6 +1169,59 @@ function bindAdminFileActions() {
             const series = btn.dataset.series;
             if (!confirm(`确定要删除整个系列 ${series} 及其所有文件吗？`)) return;
             await deleteSeries(series);
+        });
+    });
+
+    // 简介编辑：点击「✎ 简介」按钮展开编辑区
+    document.querySelectorAll('.btn-edit-desc').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const card = btn.closest('.file-card');
+            card.querySelector('.file-desc-edit').style.display = '';
+            card.querySelector('.file-desc-input').focus();
+        });
+
+        // 保存
+        const card = btn.closest('.file-card');
+        card.querySelector('.file-desc-save')?.addEventListener('click', async () => {
+            const input = card.querySelector('.file-desc-input');
+            const desc = input.value.trim();
+            const filename = btn.dataset.filename;
+            const series = btn.dataset.series;
+
+            try {
+                const resp = await authFetch(`/api/series/${encodeURIComponent(series)}/files/${encodeURIComponent(filename)}/description`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: desc }),
+                });
+                if (!resp.ok) throw new Error('保存失败');
+
+                // 更新显示
+                let descEl = card.querySelector('.file-desc');
+                if (!descEl && desc) {
+                    // 首次添加简介
+                    const sizeEl = card.querySelector('.file-size');
+                    descEl = document.createElement('span');
+                    descEl.className = 'file-desc';
+                    descEl.title = desc;
+                    sizeEl.after(descEl);
+                }
+                if (descEl) {
+                    descEl.textContent = desc;
+                    descEl.title = desc;
+                    descEl.style.display = '';
+                }
+                card.querySelector('.file-desc-edit').style.display = 'none';
+            } catch (e) {
+                alert('保存简介失败：' + e.message);
+            }
+        });
+
+        // 取消
+        card.querySelector('.file-desc-cancel')?.addEventListener('click', () => {
+            const input = card.querySelector('.file-desc-input');
+            input.value = input.defaultValue;  // 恢复原始值
+            card.querySelector('.file-desc-edit').style.display = 'none';
         });
     });
 }

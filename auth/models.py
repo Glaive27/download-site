@@ -73,6 +73,7 @@ class FileRecord(Base):  # noqa: D101
     - file_data: 文件二进制内容（直接存入数据库）
     - file_mime: 下载时使用的 MIME 类型（与 mime_type 冗余但独立，便于精确控制下载响应头）
     - created_at: 上传时间
+    - description: 文件简介/描述（管理员可编辑，用户可见）
     """
 
     __tablename__ = "file_records"
@@ -89,6 +90,7 @@ class FileRecord(Base):  # noqa: D101
     file_mime = Column(String(100), nullable=True)
     download_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
+    description = Column(String(512), nullable=True, default="")  # 文件简介
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<FileRecord(id={self.id}, series={self.series}, filename={self.filename})>"

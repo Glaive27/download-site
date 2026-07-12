@@ -426,6 +426,7 @@ async def list_files(
             "name": record.filename,
             "version": display_name,
             "size": _format_size(record.size),
+            "description": record.description or "",
         })
 
     # 补充空系列
@@ -586,6 +587,34 @@ async def delete_file(
     db.delete(record)
     db.commit()
     return JSONResponse({"message": f"文件 {filename} 已删除"})
+
+
+@app.put("/api/series/{series}/files/{filename}/description")
+async def update_file_description(
+    series: str,
+    filename: str,
+    body: dict,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员更新文件简介（仅管理员可用）."""
+    if not _is_safe_series_name(series):
+        raise HTTPException(status_code=400, detail="非法系列名")
+    if not _is_safe_filename(filename):
+        raise HTTPException(status_code=400, detail="非法文件名")
+
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.series == series, FileRecord.filename == filename)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    new_desc = (body.get("description") or "").strip()[:512]
+    record.description = new_desc
+    db.commit()
+    return JSONResponse({"ok": True, "description": record.description})
 
 
 def require_behavior_ok(
