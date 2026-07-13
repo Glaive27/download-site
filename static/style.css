@@ -1001,11 +1001,159 @@ body {
 
 /* ===== 数据记录弹窗 ===== */
 .stats-modal {
-    max-width: 460px;
-    max-height: 82vh;
+    max-width: 880px;
+    width: 92vw;
+    max-height: 86vh;
     overflow-y: auto;
     text-align: left;
 }
+
+/* ===== 数据记录 · 监控仪表盘（替代原 monitor.py） ===== */
+.stats-content {
+    font-family: "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+.db-status {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.db-status::before {
+    content: "";
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+}
+
+/* 概览卡片 */
+.db-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+.db-card {
+    position: relative;
+    overflow: hidden;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+.db-card .k { color: var(--muted); font-size: 0.72rem; margin-bottom: 4px; }
+.db-card .v { font-size: 1.4rem; font-weight: 700; color: var(--text); }
+.db-card .v small { font-size: 0.72rem; color: var(--muted); font-weight: 500; }
+.db-delta { font-size: 0.7rem; margin-left: 6px; font-weight: 600; }
+.db-delta.up { color: #34d399; }
+.db-delta.flat { color: var(--muted); }
+.db-delta.down { color: var(--danger); }
+.db-card .db-spark {
+    position: absolute;
+    right: 8px; bottom: 6px;
+    opacity: 0.65;
+}
+
+/* 段落 */
+.db-section {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+.db-section-title {
+    font-size: 0.85rem;
+    margin: 0 0 12px;
+    font-weight: 600;
+    color: var(--text);
+}
+.db-two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@media (max-width: 720px) {
+    .db-two-col { grid-template-columns: 1fr; }
+    .stats-modal { width: 96vw; }
+}
+
+/* 表格 */
+.db-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.db-table th, .db-table td {
+    text-align: left;
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--card-border);
+    vertical-align: top;
+}
+.db-table th { color: var(--muted); font-weight: 600; }
+.db-table tbody tr:hover { background: rgba(34, 211, 238, 0.06); }
+.db-table tbody tr.db-clickable { cursor: pointer; }
+.db-table tbody tr.db-clickable:hover { background: rgba(34, 211, 238, 0.1); }
+.db-changed { animation: db-flash 1.2s ease-out; }
+@keyframes db-flash {
+    0% { background: rgba(255, 209, 102, 0.3); }
+    100% { background: transparent; }
+}
+
+/* 进度条 */
+.db-barwrap { background: rgba(0,0,0,0.35); border-radius: 3px; overflow: hidden; width: 110px; display: inline-block; vertical-align: middle; }
+.db-bar { height: 6px; background: var(--accent); border-radius: 3px; min-width: 2px; }
+
+/* 徽章 */
+.db-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.db-badge.admin { background: rgba(34, 211, 238, 0.16); color: var(--accent); }
+.db-badge.user { background: rgba(148, 163, 184, 0.18); color: #aeb9d0; }
+.db-badge.risk { background: rgba(248, 113, 113, 0.2); color: var(--danger); }
+.db-badge.loc { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; }
+.db-badge.series { background: rgba(183, 148, 246, 0.18); color: #d6c2ff; }
+
+/* 标签页 */
+.db-tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.db-tab {
+    padding: 6px 12px;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.78rem;
+    transition: all 0.15s ease;
+}
+.db-tab:hover { border-color: var(--accent); }
+.db-tab.active { background: rgba(34, 211, 238, 0.12); color: var(--accent); border-color: var(--accent); }
+.db-pane { display: none; }
+.db-pane.active { display: block; }
+
+/* 事件流 */
+.db-evlist { max-height: 360px; overflow: auto; }
+.db-ev { padding: 6px 8px; border-bottom: 1px solid var(--card-border); display: flex; gap: 10px; font-size: 0.78rem; align-items: center; }
+.db-ev .u { font-weight: 600; color: var(--accent); }
+.db-ev .t { color: var(--muted); margin-left: auto; white-space: nowrap; font-size: 0.72rem; }
+.db-ev .new { background: #34d399; color: #04130c; font-size: 0.62rem; padding: 0 5px; border-radius: 6px; font-weight: 700; }
+.db-ev .series-tag { color: #d6c2ff; font-size: 0.7rem; }
+
+.db-muted { color: var(--muted); font-size: 0.78rem; }
+.db-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 0.82rem; }
+
+/* 排行榜行 */
+.db-rank-row { display: flex; justify-content: space-between; padding: 5px 2px; border-bottom: 1px solid var(--card-border); font-size: 0.78rem; }
+.db-rank-row .m { color: var(--muted); }
+
+/* 趋势迷你图容器 */
+.db-trend-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 2px; display: flex; align-items: center; gap: 8px; }
+
+/* 用户下钻（复用现有 history 面板） */
+.stats-history .stats-history-name { font-family: "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace; }
 
 .stats-modal-head {
     display: flex;

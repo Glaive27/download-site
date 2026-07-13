@@ -973,6 +973,8 @@ function requestTrajectoryReverify() {
         if (e.target === statsModal) closeStatsModal();
     });
 
+    initStatsTabs();  // 绑定数据记录标签页切换
+
     // 会话异常弹窗确认 → 强制登出
     const anomalyConfirm = document.getElementById('anomaly-confirm');
     if (anomalyConfirm) {
@@ -1472,91 +1474,293 @@ async function fetchStats() {
         renderStats(data);
     } catch (error) {
         console.error(error);
-        const box = document.getElementById('stats-files');
-        if (box) box.innerHTML = `<div class="stats-empty">${escapeHtml(error.message)}</div>`;
+        const sb = document.getElementById('db-status');
+        if (sb) sb.innerHTML = `<span style="color:var(--danger)">加载失败：${escapeHtml(error.message)}</span>`;
+        ['db-cards', 'db-files-body', 'db-series-body', 'db-users-body',
+         'db-risk-body', 'db-matrix-body', 'db-events-body'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = `<div class="db-empty">${escapeHtml(error.message)}</div>`;
+        });
     }
 }
 
-/**
- * 将统计数据渲染到弹窗
- * @param {object} data - /api/admin/stats 返回的数据
- */
+/* ===================== 数据记录 · 监控仪表盘（替代 monitor.py） ===================== */
+
+// 跨轮询的状态（用于计算增量与高亮变化）
+let _dbPrev = {
+    downloads: null,
+    visitors: null,
+    files: {},
+    users: {},
+    _spark: { downloads: [], visitors: [] },
+};
+
+/** 站点主题色（与 style.css 变量保持一致） */
+const DB_COLORS = {
+    accent: '#22d3ee',
+    green: '#34d399',
+    purple: '#b794f6',
+    danger: '#f87171',
+    yellow: '#ffd166',
+};
+
+/** 绑定数据记录标签页切换（仅一次） */
+function initStatsTabs() {
+    document.querySelectorAll('#stats-content .db-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('#stats-content .db-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('#stats-content .db-pane').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            const pane = document.getElementById('db-pane-' + tab.dataset.tab);
+            if (pane) pane.classList.add('active');
+        });
+    });
+}
+
+/** 迷你趋势图（SVG，无需图表库） */
+function dbSparkline(arr, color, w = 130, h = 34) {
+    if (!arr || arr.length < 2) return '';
+    const min = Math.min(...arr), max = Math.max(...arr), rng = (max - min) || 1;
+    const step = w / (arr.length - 1);
+    const pts = arr.map((v, i) =>
+        `${(i * step).toFixed(1)},${(h - ((v - min) / rng) * (h - 4) - 2).toFixed(1)}`
+    ).join(' ');
+    const lastY = (h - ((arr[arr.length - 1] - min) / rng) * (h - 4) - 2).toFixed(1);
+    return `<svg width="${w}" height="${h}" class="db-spark">` +
+        `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/>` +
+        `<circle cx="${w}" cy="${lastY}" r="2.5" fill="${color}"/></svg>`;
+}
+
+function dbDelta(x) {
+    if (x > 0) return `<span class="db-delta up">+${x}</span>`;
+    if (x < 0) return `<span class="db-delta down">${x}</span>`;
+    return `<span class="db-delta flat">0</span>`;
+}
+
+function dbTime(iso) {
+    if (!iso) return '';
+    return escapeHtml(String(iso).replace('T', ' ').slice(0, 19));
+}
+
+/** 主渲染入口 */
 function renderStats(data) {
-    document.getElementById('stats-total-downloads').textContent = data.total_downloads;
-    document.getElementById('stats-total-visitors').textContent = data.total_visitors;
+    // 状态条
+    const st = document.getElementById('db-status');
+    if (st) st.textContent = `数据记录 · 实时监控（每 5 秒刷新）`;
 
-    renderQuota(data);
+    const dl = data.total_downloads || 0;
+    const vis = data.total_visitors || 0;
 
-    const filesBox = document.getElementById('stats-files');
-    if (!Array.isArray(data.files) || data.files.length === 0) {
-        filesBox.innerHTML = '<div class="stats-empty">暂无文件下载记录</div>';
+    // 维护迷你趋势序列
+    const sd = _dbPrev._spark.downloads, sv = _dbPrev._spark.visitors;
+    sd.push(dl); sv.push(vis);
+    if (sd.length > 40) sd.shift();
+    if (sv.length > 40) sv.shift();
+
+    const dDl = _dbPrev.downloads != null ? dl - _dbPrev.downloads : 0;
+    const dVis = _dbPrev.visitors != null ? vis - _dbPrev.visitors : 0;
+    _dbPrev.downloads = dl;
+    _dbPrev.visitors = vis;
+
+    // ---- 概览卡片 ----
+    const riskCount = (data.users || []).filter(u => u.high_risk).length;
+    const cards = [
+        { k: '总下载量', v: dl, sub: dbDelta(dDl), spark: dbSparkline(sd, DB_COLORS.accent) },
+        { k: '总访问人数', v: vis, sub: dbDelta(dVis), spark: dbSparkline(sv, DB_COLORS.green) },
+        { k: '当前在线', v: data.active_users == null ? '—' : data.active_users },
+        { k: '数据库占用', v: formatBytes(data.db_size_bytes || 0), sub: data.db_quota_bytes ? ('/ ' + formatBytes(data.db_quota_bytes)) : '' },
+        { k: '文件数', v: (data.files || []).length },
+        { k: '注册用户', v: (data.users || []).length },
+        { k: '高危用户', v: riskCount, red: riskCount > 0 },
+    ];
+    document.getElementById('db-cards').innerHTML = cards.map(c => `
+        <div class="db-card">
+            <div class="k">${c.k}</div>
+            <div class="v" ${c.red ? `style="color:${DB_COLORS.danger}"` : ''}>${c.v}${c.sub || ''}</div>
+            ${c.spark ? `<div class="db-spark">${c.spark}</div>` : ''}
+        </div>
+    `).join('');
+
+    // ---- 趋势 ----
+    document.getElementById('db-trend-downloads').innerHTML =
+        `<div class="db-trend-label">下载量 ${dbSparkline(sd, DB_COLORS.accent, 220)}</div>`;
+    document.getElementById('db-trend-visitors').innerHTML =
+        `<div class="db-trend-label">访问人数 ${dbSparkline(sv, DB_COLORS.green, 220)}</div>`;
+
+    // ---- 排行榜 ----
+    const topUsers = (data.users || []).slice().sort((a, b) => (b.download_count || 0) - (a.download_count || 0)).slice(0, 6);
+    const tu = topUsers.length
+        ? topUsers.map(u => `<div class="db-rank-row"><span><b>${escapeHtml(u.username)}</b></span><span class="m">${u.download_count} 次</span></div>`).join('')
+        : '<div class="db-muted">暂无</div>';
+    const topFiles = (data.files || []).slice().sort((a, b) => (b.downloads || 0) - (a.downloads || 0)).slice(0, 6);
+    const tf = topFiles.length
+        ? topFiles.map(f => `<div class="db-rank-row"><span>${escapeHtml(f.name)}</span><span class="m">${f.downloads} 次</span></div>`).join('')
+        : '<div class="db-muted">暂无</div>';
+    document.getElementById('db-top-list').innerHTML =
+        `<div style="margin-bottom:10px"><div class="db-muted" style="margin-bottom:4px">👤 活跃用户</div>${tu}</div>` +
+        `<div><div class="db-muted" style="margin-bottom:4px">📦 热门文件</div>${tf}</div>`;
+
+    // ---- 文件下载 ----
+    const files = (data.files || []).slice().sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+    if (!files.length) {
+        document.getElementById('db-files-body').innerHTML = '<div class="db-empty">暂无文件</div>';
     } else {
-        filesBox.innerHTML = data.files.map(file => `
-            <div class="stats-file-row">
-                <div class="stats-file-head">
-                    <span class="stats-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                    <span class="stats-file-series">${escapeHtml(file.series)}</span>
-                    <span class="stats-file-count">${file.downloads} 次</span>
-                </div>
-                <div class="stats-bar">
-                    <span class="stats-bar-fill" style="width:${file.ratio}%"></span>
-                </div>
-                <span class="stats-file-ratio">占比 ${file.ratio}%</span>
-            </div>
-        `).join('');
+        const max = Math.max(...files.map(f => f.downloads || 0), 1);
+        const rows = files.map(f => {
+            const d = f.downloads || 0;
+            const w = Math.max(2, Math.round(d / max * 110));
+            const ch = _dbPrev.files[f.name] != null && _dbPrev.files[f.name] !== d ? 'db-changed' : '';
+            _dbPrev.files[f.name] = d;
+            return `<tr class="${ch}">
+                <td>${escapeHtml(f.name)}</td>
+                <td class="db-muted">${escapeHtml(f.series || '')}</td>
+                <td><b>${d}</b></td>
+                <td><div style="display:flex;gap:8px;align-items:center">
+                    <span class="db-barwrap"><span class="db-bar" style="width:${w}px"></span></span>
+                    <span class="db-muted">${f.ratio || 0}%</span></div></td>
+            </tr>`;
+        }).join('');
+        document.getElementById('db-files-body').innerHTML =
+            `<table class="db-table"><thead><tr><th>文件名</th><th>系列</th><th>下载次数</th><th>占比</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
-    const userBox = document.getElementById('stats-users');
-    document.getElementById('stats-user-count').textContent = data.users.length;
-    if (!Array.isArray(data.users) || data.users.length === 0) {
-        userBox.innerHTML = '<li class="stats-empty">暂无注册账号</li>';
+    // ---- 系列聚合 ----
+    const groups = {};
+    (data.files || []).forEach(f => {
+        const s = f.series || '未分类';
+        if (!groups[s]) groups[s] = { series: s, downloads: 0, files: 0 };
+        groups[s].downloads += f.downloads || 0;
+        groups[s].files += 1;
+    });
+    const gArr = Object.values(groups).sort((a, b) => b.downloads - a.downloads);
+    if (!gArr.length) {
+        document.getElementById('db-series-body').innerHTML = '<div class="db-empty">暂无</div>';
     } else {
-        userBox.innerHTML = data.users.map(u => `
-            <li class="stats-user-row" data-username="${escapeHtml(u.username)}">
-                <span class="stats-user-info" role="button" tabindex="0" title="查看下载记录">
-                    <span class="stats-user-name">${escapeHtml(u.username)}</span>
-                    <span class="stats-user-role ${escapeHtml(u.role)}">${escapeHtml(u.role === 'admin' ? '管理员' : '用户')}</span>
-                    ${u.high_risk ? '<span class="stats-user-risk" title="长期未上线且从未下载，已被标记为高危账号">高危</span>' : ''}
-                    ${u.ip_location ? `<span class="stats-user-loc" title="最近登录 IP 地理位置">📍 ${escapeHtml(u.ip_location)}</span>` : ''}
-                </span>
-                <button class="btn btn-danger btn-sm stats-user-del" data-user="${escapeHtml(u.username)}">删除</button>
-            </li>
-        `).join('');
+        const max = Math.max(...gArr.map(x => x.downloads), 1);
+        const rows = gArr.map(x => {
+            const w = Math.max(2, Math.round(x.downloads / max * 110));
+            return `<tr>
+                <td><span class="db-badge series">${escapeHtml(x.series)}</span></td>
+                <td><b>${x.downloads}</b></td>
+                <td>${x.files} 个文件</td>
+                <td><span class="db-barwrap"><span class="db-bar" style="width:${w}px;background:${DB_COLORS.purple}"></span></span></td>
+            </tr>`;
+        }).join('');
+        document.getElementById('db-series-body').innerHTML =
+            `<table class="db-table"><thead><tr><th>系列</th><th>下载量</th><th>文件数</th><th>占比</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
 
-        // 绑定账号名点击 → 查看该用户的历史下载记录
-        userBox.querySelectorAll('.stats-user-info').forEach(el => {
-            const uname = el.closest('.stats-user-row').dataset.username;
-            el.addEventListener('click', () => openUserHistory(uname));
-            el.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    openUserHistory(uname);
-                }
+    // ---- 用户概览 ----
+    const users = (data.users || []).slice().sort((a, b) => (b.download_count || 0) - (a.download_count || 0));
+    if (!users.length) {
+        document.getElementById('db-users-body').innerHTML = '<div class="db-empty">暂无用户</div>';
+    } else {
+        const rows = users.map(u => {
+            const un = u.username;
+            const ud = (data.user_downloads && data.user_downloads[un]) || {};
+            const d = u.download_count || 0;
+            const ch = _dbPrev.users[un] != null && _dbPrev.users[un] !== d ? 'db-changed' : '';
+            _dbPrev.users[un] = d;
+            const role = u.role === 'admin'
+                ? '<span class="db-badge admin">管理员</span>'
+                : '<span class="db-badge user">用户</span>';
+            const risk = u.high_risk ? ' <span class="db-badge risk">高危</span>' : '';
+            const loc = u.ip_location ? `<span class="db-badge loc">📍 ${escapeHtml(u.ip_location)}</span>` : '';
+            return `<tr class="db-clickable" data-user="${escapeHtml(un)}">
+                <td><b>${escapeHtml(un)}</b> ${role}${risk}</td>
+                <td>${d}</td>
+                <td>${ud.downloaded_files || 0}/${ud.total_files || data.total_files_site || '?'} <span class="db-muted">(${ud.ratio || 0}%)</span></td>
+                <td>${loc}</td>
+                <td class="db-muted">${dbTime(u.last_login)}</td>
+                <td><button class="btn btn-danger btn-sm db-del" data-user="${escapeHtml(un)}">删除</button></td>
+            </tr>`;
+        }).join('');
+        document.getElementById('db-users-body').innerHTML =
+            `<table class="db-table"><thead><tr><th>用户（点击查看历史）</th><th>累计下载</th><th>已下载/总数</th><th>归属地</th><th>最近登录</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+
+        // 点击行 → 下钻；点击删除 → 删除账号
+        document.getElementById('db-users-body').querySelectorAll('tr.db-clickable').forEach(tr => {
+            tr.addEventListener('click', (e) => {
+                if (e.target.closest('.db-del')) return;
+                openUserHistory(tr.dataset.user);
             });
         });
-
-        // 绑定删除按钮事件
-        userBox.querySelectorAll('.stats-user-del').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const uname = btn.dataset.user;
-                if (!confirm(`确定要删除用户「${uname}」吗？此操作不可恢复。`)) return;
+        document.getElementById('db-users-body').querySelectorAll('.db-del').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const un = btn.dataset.user;
+                if (!confirm(`确定要删除用户「${un}」吗？此操作不可恢复。`)) return;
                 try {
                     const token = localStorage.getItem(TOKEN_KEY);
-                    const res = await fetch(`/api/admin/users/${encodeURIComponent(uname)}`, {
+                    const res = await fetch(`/api/admin/users/${encodeURIComponent(un)}`, {
                         method: 'DELETE',
                         headers: { 'Authorization': `Bearer ${token}` },
                     });
-                    if (res.ok) {
-                        fetchStats();  // 刷新列表
-                    } else {
+                    if (res.ok) fetchStats();
+                    else {
                         const err = await res.json().catch(() => ({ detail: '删除失败' }));
                         alert(err.detail || '删除失败');
                     }
-                } catch (e) {
-                    alert('请求失败，请重试');
-                }
+                } catch (_) { alert('请求失败，请重试'); }
             });
         });
+    }
+
+    // ---- 风险用户 ----
+    const riskList = (data.users || []).filter(u => u.high_risk);
+    if (!riskList.length) {
+        document.getElementById('db-risk-body').innerHTML = '<div class="db-empty">🎉 当前无高危用户</div>';
+    } else {
+        const rows = riskList.map(u => {
+            const ud = (data.user_downloads && data.user_downloads[u.username]) || {};
+            return `<tr>
+                <td><b>${escapeHtml(u.username)}</b></td>
+                <td>${u.download_count || 0}</td>
+                <td>${ud.downloaded_files || 0}/${ud.total_files || data.total_files_site || '?'} <span class="db-muted">(${ud.ratio || 0}%)</span></td>
+                <td>${u.ip_location ? `<span class="db-badge loc">📍 ${escapeHtml(u.ip_location)}</span>` : '<span class="db-muted">未知</span>'}</td>
+                <td class="db-muted">${dbTime(u.last_login)}</td>
+            </tr>`;
+        }).join('');
+        document.getElementById('db-risk-body').innerHTML =
+            `<div class="db-muted" style="margin-bottom:8px">高危定义：注册后从未下载、且超过设定天数未上线。</div>` +
+            `<table class="db-table"><thead><tr><th>用户</th><th>累计下载</th><th>已下载/总数</th><th>归属地</th><th>最近登录</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // ---- 用户 × 文件 矩阵 ----
+    const matrix = data.matrix || {};
+    const names = Object.keys(matrix);
+    if (!names.length) {
+        document.getElementById('db-matrix-body').innerHTML = '<div class="db-empty">暂无下载记录</div>';
+    } else {
+        const rows = names.map(un => {
+            const cells = Object.entries(matrix[un]).sort((a, b) => b[1] - a[1])
+                .map(([fn, c]) => `<span class="db-badge user" title="${escapeHtml(fn)}">${escapeHtml(fn.length > 20 ? fn.slice(0, 20) + '…' : fn)} ×${c}</span>`)
+                .join(' ');
+            return `<tr>
+                <td><b>${escapeHtml(un)}</b></td>
+                <td style="line-height:1.9">${cells || '<span class="db-muted">未下载任何文件</span>'}</td>
+            </tr>`;
+        }).join('');
+        document.getElementById('db-matrix-body').innerHTML =
+            `<table class="db-table"><thead><tr><th>用户</th><th>下载过的文件（×次数）</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // ---- 实时事件流 ----
+    const evs = data.recent_events || [];
+    if (!evs.length) {
+        document.getElementById('db-events-body').innerHTML = '<div class="db-empty">暂无下载事件</div>';
+    } else {
+        const newest = evs.length ? evs[0].downloaded_at : '';
+        document.getElementById('db-events-body').innerHTML = evs.map(e => {
+            const isNew = e.downloaded_at === newest;
+            return `<div class="db-ev">
+                <span class="u">${escapeHtml(e.username)}</span>
+                <span>下载了 <b>${escapeHtml(e.file_name)}</b></span>
+                ${e.series ? `<span class="series-tag">[${escapeHtml(e.series)}]</span>` : ''}
+                ${isNew ? '<span class="new">NEW</span>' : ''}
+                <span class="t">${dbTime(e.downloaded_at)}</span>
+            </div>`;
+        }).join('');
     }
 }
 
@@ -1572,43 +1776,6 @@ function formatBytes(bytes) {
     const val = bytes / Math.pow(1024, i);
     const fixed = i === 0 ? 0 : (val >= 100 || Number.isInteger(val) ? 0 : 1);
     return `${val.toFixed(fixed)} ${units[i]}`;
-}
-
-/**
- * 渲染数据库额度进度条
- * @param {object} data - /api/admin/stats 返回的数据（含 db_size_bytes / db_quota_bytes）
- */
-function renderQuota(data) {
-    const usedEl = document.getElementById('quota-used');
-    const remainingEl = document.getElementById('quota-remaining');
-    const fillEl = document.getElementById('quota-bar-fill');
-    const hintEl = document.getElementById('quota-hint');
-    if (!usedEl || !remainingEl || !fillEl || !hintEl) return;
-
-    const used = Number(data.db_size_bytes) || 0;
-    const quota = Number(data.db_quota_bytes) || 0;
-
-    usedEl.textContent = formatBytes(used);
-
-    if (quota <= 0) {
-        // 未配置额度：仅显示已用空间，不画进度比例
-        remainingEl.textContent = '未配置额度';
-        fillEl.style.width = '0%';
-        hintEl.textContent = used > 0 ? `当前数据库占用 ${formatBytes(used)}` : '暂无额度信息';
-        return;
-    }
-
-    const remaining = Math.max(0, quota - used);
-    const pct = Math.min(100, (used / quota) * 100);
-    remainingEl.textContent = formatBytes(remaining);
-    fillEl.style.width = `${pct}%`;
-
-    // 用量越高颜色越警示：<70% 正常（accent）/ <90% 警告（橙）/ >=90% 危险（红）
-    fillEl.classList.remove('warn', 'danger');
-    if (pct >= 90) fillEl.classList.add('danger');
-    else if (pct >= 70) fillEl.classList.add('warn');
-
-    hintEl.textContent = `已使用 ${(quota ? (used / quota * 100) : 0).toFixed(1)}% / 总额度 ${formatBytes(quota)}`;
 }
 
 /**

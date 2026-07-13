@@ -998,17 +998,23 @@ async def admin_stats(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JSONResponse:
-    """管理员专用：返回数据记录统计.
+    """管理员专用：返回数据记录统计（含 monitor 全量数据）.
 
     包含：
     - 每个文件的下载量与下载占比
     - 总下载量
     - 总访问人数（累计独立访客，去重）
-    - 已注册账号列表（仅用户名与角色，不含密码）
+    - 当前在线人数（实时窗口）
+    - 已注册账号列表（含角色 / 高危标记 / 累计下载 / 归属地）
     - 数据库已用空间与额度（`db_size_bytes` / `db_quota_bytes`）
+    - ``user_downloads``：每个用户的下载历史（用于矩阵 / 事件流 / 用户下钻）
+    - ``matrix``：用户 × 文件 的下载次数映射
+    - ``recent_events``：跨所有用户、按时间倒序的下载事件流
+    - ``total_files_site``：站点文件总数（供前端补全比例）
     """
     records = db.query(FileRecord).all()
     total_downloads = sum(r.download_count or 0 for r in records)
+    total_files_site = len(records)
 
     files = []
     for record in records:
@@ -1040,14 +1046,73 @@ async def admin_stats(
 
     db_size_bytes = get_database_size_bytes(db)
     db_quota_bytes = DATABASE_QUOTA_BYTES
+    active_users = _count_active_sessions()
+
+    # ---- 用户下载历史（一次性聚合，供前端矩阵 / 事件流 / 下钻复用） ----
+    user_downloads: dict[str, dict] = {}
+    matrix: dict[str, dict[str, int]] = {}
+    events: list[dict] = []
+
+    all_logs = (
+        db.query(DownloadLog, FileRecord, User)
+        .join(FileRecord, DownloadLog.file_record_id == FileRecord.id)
+        .join(User, DownloadLog.user_id == User.id)
+        .order_by(DownloadLog.downloaded_at.asc())
+        .all()
+    )
+    for log, record, owner in all_logs:
+        uname = owner.username
+        fname = (
+            record.original_filename
+            or f"{record.version}{Path(record.filename).suffix}"
+        )
+        dl_at = log.downloaded_at.isoformat()
+        ud = user_downloads.setdefault(uname, {
+            "username": uname,
+            "total_files": total_files_site,
+            "downloaded_files": 0,
+            "ratio": 0,
+            "history": [],
+        })
+        ud["history"].append({
+            "file_name": fname,
+            "series": record.series,
+            "downloaded_at": dl_at,
+        })
+        # 矩阵累计
+        m = matrix.setdefault(uname, {})
+        m[fname] = m.get(fname, 0) + 1
+        # 事件流
+        events.append({
+            "username": uname,
+            "file_name": fname,
+            "series": record.series or "",
+            "downloaded_at": dl_at,
+        })
+
+    # 补全每用户 downloaded_files / ratio，并按时间倒序排序历史
+    for uname, ud in user_downloads.items():
+        distinct = {h["file_name"] for h in ud["history"]}
+        ud["downloaded_files"] = len(distinct)
+        ud["ratio"] = round(len(distinct) / total_files_site * 100, 1) if total_files_site else 0
+        ud["history"].sort(key=lambda h: h["downloaded_at"], reverse=True)
+
+    # 事件流整体按时间倒序，取最近 100 条
+    events.sort(key=lambda e: e["downloaded_at"], reverse=True)
+    recent_events = events[:100]
 
     return JSONResponse({
         "files": files,
         "total_downloads": total_downloads,
         "total_visitors": total_visitors,
+        "active_users": active_users,
         "users": users,
         "db_size_bytes": db_size_bytes,
         "db_quota_bytes": db_quota_bytes,
+        "total_files_site": total_files_site,
+        "user_downloads": user_downloads,
+        "matrix": matrix,
+        "recent_events": recent_events,
     })
 
 

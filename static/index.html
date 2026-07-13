@@ -196,49 +196,41 @@
             </div>
 
             <div class="stats-content" id="stats-content">
-                <section class="stats-section">
-                    <h3 class="stats-section-title">总览</h3>
-                    <div class="stats-overview">
-                        <div class="stats-stat">
-                            <span class="stats-stat-value" id="stats-total-downloads">0</span>
-                            <span class="stats-stat-label">总下载量</span>
-                        </div>
-                        <div class="stats-stat">
-                            <span class="stats-stat-value" id="stats-total-visitors">0</span>
-                            <span class="stats-stat-label">总访问人数</span>
-                        </div>
-                    </div>
-                </section>
+                <div class="db-status" id="db-status">加载中…</div>
 
-                <section class="stats-section">
-                    <h3 class="stats-section-title">文件下载统计</h3>
-                    <div class="stats-files" id="stats-files">
-                        <div class="stats-empty">加载中…</div>
-                    </div>
-                </section>
+                <!-- 概览卡片 -->
+                <div class="db-cards" id="db-cards"></div>
 
-                <section class="stats-section">
-                    <h3 class="stats-section-title">数据库额度</h3>
-                    <div class="quota-card">
-                        <div class="quota-row">
-                            <span class="quota-label">已用空间</span>
-                            <span class="quota-used" id="quota-used">—</span>
-                        </div>
-                        <div class="quota-row">
-                            <span class="quota-label">剩余额度</span>
-                            <span class="quota-remaining" id="quota-remaining">—</span>
-                        </div>
-                        <div class="quota-bar">
-                            <span class="quota-bar-fill" id="quota-bar-fill" style="width:0%"></span>
-                        </div>
-                        <span class="quota-hint" id="quota-hint">加载中…</span>
+                <!-- 趋势 + 排行榜 -->
+                <div class="db-two-col">
+                    <div class="db-section">
+                        <h3 class="db-section-title">📈 下载量 / 访问人数 趋势</h3>
+                        <div id="db-trend-downloads"></div>
+                        <div id="db-trend-visitors" style="margin-top:8px"></div>
                     </div>
-                </section>
+                    <div class="db-section">
+                        <h3 class="db-section-title">🏆 下载排行榜</h3>
+                        <div id="db-top-list"></div>
+                    </div>
+                </div>
 
-                <section class="stats-section">
-                    <h3 class="stats-section-title">注册账号（<span id="stats-user-count">0</span>）</h3>
-                    <ul class="stats-users" id="stats-users"></ul>
-                </section>
+                <!-- 标签页 -->
+                <div class="db-section">
+                    <div class="db-tabs">
+                        <div class="db-tab active" data-tab="files">📦 文件下载</div>
+                        <div class="db-tab" data-tab="series">🗂 系列聚合</div>
+                        <div class="db-tab" data-tab="users">👤 用户概览</div>
+                        <div class="db-tab" data-tab="risk">⚠ 风险用户</div>
+                        <div class="db-tab" data-tab="matrix">🔗 用户×文件</div>
+                        <div class="db-tab" data-tab="events">⚡ 实时事件</div>
+                    </div>
+                    <div class="db-pane active" id="db-pane-files"><div id="db-files-body" class="db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-series"><div id="db-series-body" class="db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-users"><div id="db-users-body" class="db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-risk"><div id="db-risk-body" class="db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-matrix"><div id="db-matrix-body" class="db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-events"><div id="db-events-body" class="db-evlist db-empty">加载中…</div></div>
+                </div>
             </div>
 
             <div class="stats-history hidden" id="stats-history">

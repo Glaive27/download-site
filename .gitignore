@@ -61,3 +61,4 @@ db/*
 
 # WorkBuddy workspace data
 .workbuddy/
+monitor_venv/
