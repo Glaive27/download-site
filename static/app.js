@@ -998,6 +998,15 @@ function requestTrajectoryReverify() {
             if (e.target === loginRequiredModal) hideLoginRequired();
         });
     }
+
+    // 在线用户弹窗事件
+    const onlineUsersModal = document.getElementById('online-users-modal');
+    if (onlineUsersModal) {
+        document.getElementById('online-users-close').addEventListener('click', closeOnlineUsersModal);
+        onlineUsersModal.addEventListener('click', (e) => {
+            if (e.target === onlineUsersModal) closeOnlineUsersModal();
+        });
+    }
     document.getElementById('stats-back').addEventListener('click', showStatsContentView);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
@@ -1539,7 +1548,13 @@ function dbDelta(x) {
 
 function dbTime(iso) {
     if (!iso) return '';
-    return escapeHtml(String(iso).replace('T', ' ').slice(0, 19));
+    // 将服务器 ISO 时间转为北京时间 (UTC+8)
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return escapeHtml(String(iso).replace('T', ' ').slice(0, 19));
+    const pad = (n) => String(n).padStart(2, '0');
+    const utc8 = new Date(d.getTime() + 8 * 3600000);
+    return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth()+1)}-${pad(utc8.getUTCDate())} `
+        + `${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}`;
 }
 
 /** 主渲染入口 */
@@ -1567,19 +1582,26 @@ function renderStats(data) {
     const cards = [
         { k: '总下载量', v: dl, sub: dbDelta(dDl), spark: dbSparkline(sd, DB_COLORS.accent) },
         { k: '总访问人数', v: vis, sub: dbDelta(dVis), spark: dbSparkline(sv, DB_COLORS.green) },
-        { k: '当前在线', v: data.active_users == null ? '—' : data.active_users },
+        { k: '当前在线', v: data.active_users == null ? '—' : data.active_users, clickable: true },
         { k: '数据库占用', v: formatBytes(data.db_size_bytes || 0), sub: data.db_quota_bytes ? ('/ ' + formatBytes(data.db_quota_bytes)) : '' },
         { k: '文件数', v: (data.files || []).length },
         { k: '注册用户', v: (data.users || []).length },
         { k: '高危用户', v: riskCount, red: riskCount > 0 },
     ];
     document.getElementById('db-cards').innerHTML = cards.map(c => `
-        <div class="db-card">
+        <div class="db-card${c.clickable ? ' db-card-clickable' : ''}">
             <div class="k">${c.k}</div>
             <div class="v" ${c.red ? `style="color:${DB_COLORS.danger}"` : ''}>${c.v}${c.sub || ''}</div>
             ${c.spark ? `<div class="db-spark">${c.spark}</div>` : ''}
         </div>
     `).join('');
+
+    // 绑定「当前在线」卡片点击 → 弹出在线用户列表
+    const onlineCard = document.querySelector('.db-card-clickable');
+    if (onlineCard) {
+        onlineCard.style.cursor = 'pointer';
+        onlineCard.addEventListener('click', openOnlineUsersModal);
+    }
 
     // ---- 趋势 ----
     document.getElementById('db-trend-downloads').innerHTML =
@@ -1882,9 +1904,11 @@ function renderUserHistory(data) {
 function formatDateTime(iso) {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
+    // 统一使用北京时间 (UTC+8)
     const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const utc8 = new Date(d.getTime() + 8 * 3600000);
+    return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth()+1)}-${pad(utc8.getUTCDate())} ` +
+        `${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}`;
 }
 
 /**
@@ -2254,9 +2278,13 @@ function getSessionId() {
  */
 async function pingActive() {
     try {
+        const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+        // 已登录时携带 token，后端可据此记录该会话对应的用户名（用于"当前在线"弹窗）
+        const token = localStorage.getItem(TOKEN_KEY);
+        if (token) headers['Authorization'] = `Bearer ${token}`;
         await fetch('/api/active-ping', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers,
             body: new URLSearchParams({ session_id: getSessionId() }),
         });
     } catch (error) {
@@ -2426,6 +2454,52 @@ function showAccountInvalid(message) {
 function showLoginRequired() {
     const modal = document.getElementById('login-required-modal');
     if (modal) modal.classList.add('active');
+}
+
+/* ===== 当前在线用户弹窗 ===== */
+let onlineUsersTimer = null;
+
+/** 打开在线用户弹窗并拉取列表 */
+function openOnlineUsersModal() {
+    const modal = document.getElementById('online-users-modal');
+    if (!modal) return;
+    modal.classList.add('active');
+    fetchOnlineUsers();
+    // 弹窗打开期间每 5 秒自动刷新
+    if (onlineUsersTimer) clearInterval(onlineUsersTimer);
+    onlineUsersTimer = setInterval(fetchOnlineUsers, 5000);
+}
+
+/** 关闭在线用户弹窗并停止自动刷新 */
+function closeOnlineUsersModal() {
+    const modal = document.getElementById('online-users-modal');
+    if (modal) modal.classList.remove('active');
+    if (onlineUsersTimer) { clearInterval(onlineUsersTimer); onlineUsersTimer = null; }
+}
+
+/** 拉取并渲染在线用户列表 */
+async function fetchOnlineUsers() {
+    try {
+        const res = await authFetch('/api/admin/active-users');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderOnlineUsers(data.online_list || []);
+    } catch { /* 静默 */ }
+}
+
+function renderOnlineUsers(list) {
+    const el = document.getElementById('online-users-list');
+    if (!el) return;
+    if (!list.length) {
+        el.innerHTML = '<li class="stats-empty">暂无在线用户</li>';
+        return;
+    }
+    el.innerHTML = list.map(u => `
+        <li>
+            <span class="online-users-name">${escapeHtml(u.username)}${u.username !== '匿名访客' ? ' 👤' : ' 🌐'}</span>
+            <span class="online-users-time">${dbTime(u.last_active_at)}</span>
+        </li>
+    `).join('');
 }
 
 /**

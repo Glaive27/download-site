@@ -366,7 +366,8 @@ def _build_object_key(series: str, filename: str) -> str:
 # 当前在线访问数统计（内存结构，适用于单实例部署）
 # 记录每个访问会话最近一次活动的时间戳；超过窗口未活动视为离线。
 # ---------------------------------------------------------------------------
-ACTIVE_SESSIONS: dict[str, float] = {}
+# 在线会话追踪（内存）：{session_id: {"ts": timestamp, "username": str|None}}
+ACTIVE_SESSIONS: dict[str, dict] = {}
 ACTIVE_SESSIONS_LOCK = threading.Lock()
 ACTIVE_WINDOW_SECONDS = 60  # 超过该时长未发送心跳即视为离线
 
@@ -375,7 +376,7 @@ def _prune_active_sessions() -> None:
     """清理过期的会话记录，防止内存无限增长."""
     now = time.time()
     cutoff = now - ACTIVE_WINDOW_SECONDS
-    dead = [sid for sid, ts in ACTIVE_SESSIONS.items() if ts < cutoff]
+    dead = [sid for sid, info in ACTIVE_SESSIONS.items() if info["ts"] < cutoff]
     for sid in dead:
         ACTIVE_SESSIONS.pop(sid, None)
 
@@ -384,6 +385,31 @@ def _count_active_sessions() -> int:
     """返回当前在线（活跃）的访问会话数量，非累计值."""
     _prune_active_sessions()
     return len(ACTIVE_SESSIONS)
+
+
+def _get_active_users_list() -> list[dict]:
+    """返回当前在线用户列表（含用户名与最后活跃时间），仅管理员使用."""
+    from auth.security import decode_access_token, JWTError
+    _prune_active_sessions()
+    results = []
+    seen_usernames: set[str] = set()
+    for sid, info in ACTIVE_SESSIONS.items():
+        uname = info.get("username")
+        entry = {
+            "session_id": sid[:8] + "...",  # 仅展示前几位，不泄露完整 ID
+            "username": uname or "匿名访客",
+            "last_active_at": datetime.fromtimestamp(info["ts"], tz=timezone.utc).isoformat(),
+        }
+        # 去重：同一用户多设备/标签页只保留最新一条
+        if uname:
+            if uname not in seen_usernames:
+                seen_usernames.add(uname)
+                results.append(entry)
+        else:
+            results.append(entry)
+    # 按最后活跃时间倒序
+    results.sort(key=lambda x: x["last_active_at"], reverse=True)
+    return results
 
 
 def _next_version_number(db: Session, series: str) -> int:
@@ -952,6 +978,7 @@ async def altcha_challenge() -> JSONResponse:
 
 @app.post("/api/active-ping")
 async def active_ping(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     session_id: str = Form(...),
 ) -> JSONResponse:
@@ -959,14 +986,26 @@ async def active_ping(
 
     前端在打开页面时及之后定时调用本接口，携带一个本机唯一的 session_id。
     - 在线统计：仅记录该会话最近活动时间到内存（实时、非累计）。
+    - 若请求携带有效 JWT Authorization，则同时记录该会话对应的登录用户名。
     - 累计访问人数：首次出现的 session_id 写入 unique_visitors 表（去重，持久化）。
     """
     sid = (session_id or "").strip()
     if not sid or len(sid) > 64:
         raise HTTPException(status_code=400, detail="非法的 session_id")
 
+    # 尝试从 Authorization 头提取登录用户名（静默失败：匿名访客不报错）
+    username = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        from auth.security import decode_access_token, JWTError
+        try:
+            payload = decode_access_token(auth_header[7:])
+            username = payload.get("sub")
+        except (JWTError, Exception):
+            pass
+
     with ACTIVE_SESSIONS_LOCK:
-        ACTIVE_SESSIONS[sid] = time.time()
+        ACTIVE_SESSIONS[sid] = {"ts": time.time(), "username": username}
     # 控制内存规模：每次心跳顺手清理过期会话
     _prune_active_sessions()
 
@@ -986,11 +1025,15 @@ async def active_ping(
 async def admin_active_users(
     current_user: Annotated[User, Depends(require_admin)],
 ) -> JSONResponse:
-    """管理员专用：返回当前在线访问数（实时、非累计）.
+    """管理员专用：返回当前在线用户列表（含用户名与最后活跃时间）.
 
     统计所有在 ``ACTIVE_WINDOW_SECONDS`` 窗口内仍有心跳的访问会话。
     """
-    return JSONResponse({"active_users": _count_active_sessions()})
+    online = _get_active_users_list()
+    return JSONResponse({
+        "active_users": len(ACTIVE_SESSIONS),
+        "online_list": online,
+    })
 
 
 @app.get("/api/admin/stats")
