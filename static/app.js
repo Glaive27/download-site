@@ -1007,6 +1007,12 @@ function requestTrajectoryReverify() {
             if (e.target === onlineUsersModal) closeOnlineUsersModal();
         });
     }
+
+    // 主界面「当前在线」徽章点击 → 弹出在线用户列表
+    const onlineBadge = document.getElementById('online-badge');
+    if (onlineBadge) {
+        onlineBadge.addEventListener('click', openOnlineUsersModal);
+    }
     document.getElementById('stats-back').addEventListener('click', showStatsContentView);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
@@ -1582,7 +1588,7 @@ function renderStats(data) {
     const cards = [
         { k: '总下载量', v: dl, sub: dbDelta(dDl), spark: dbSparkline(sd, DB_COLORS.accent) },
         { k: '总访问人数', v: vis, sub: dbDelta(dVis), spark: dbSparkline(sv, DB_COLORS.green) },
-        { k: '当前在线', v: data.active_users == null ? '—' : data.active_users, clickable: true },
+        { k: '当前在线', v: data.active_users == null ? '—' : data.active_users },
         { k: '数据库占用', v: formatBytes(data.db_size_bytes || 0), sub: data.db_quota_bytes ? ('/ ' + formatBytes(data.db_quota_bytes)) : '' },
         { k: '文件数', v: (data.files || []).length },
         { k: '注册用户', v: (data.users || []).length },
@@ -1595,13 +1601,6 @@ function renderStats(data) {
             ${c.spark ? `<div class="db-spark">${c.spark}</div>` : ''}
         </div>
     `).join('');
-
-    // 绑定「当前在线」卡片点击 → 弹出在线用户列表
-    const onlineCard = document.querySelector('.db-card-clickable');
-    if (onlineCard) {
-        onlineCard.style.cursor = 'pointer';
-        onlineCard.addEventListener('click', openOnlineUsersModal);
-    }
 
     // ---- 趋势 ----
     document.getElementById('db-trend-downloads').innerHTML =
