@@ -1178,11 +1178,16 @@ body {
     font-size: 0.8rem;
     padding: 4px 8px;
     border-radius: 6px;
-    border: 1px solid var(--border, #d0d7de);
-    background: var(--card, #fff);
-    color: var(--text, #1a1a1a);
+    border: 1px solid #444;
+    background: #1e293b;
+    color: #e2e8f0;
     cursor: pointer;
     max-width: 260px;
+    outline: none;
+    -webkit-appearance: menulist;
+}
+.db-model-select:focus {
+    border-color: var(--accent, #22d3ee);
 }
 .db-ai-status {
     font-size: 0.78rem;

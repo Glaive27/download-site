@@ -2534,7 +2534,15 @@ async function analyzeRisksAI() {
         const data = await res.json();
 
         if (!res.ok) {
-            throw new Error(data.detail || (typeof data === 'string' ? data : '请求失败'));
+            let errMsg = '请求失败';
+            if (data) {
+                if (typeof data.detail === 'string') errMsg = data.detail;
+                else if (typeof data.detail === 'object' && data.detail !== null)
+                    errMsg = data.detail.message || data.detail.detail || JSON.stringify(data.detail);
+                else if (typeof data === 'string') errMsg = data;
+                else errMsg = JSON.stringify(data).slice(0, 300);
+            }
+            throw new Error(errMsg);
         }
 
         const summary = data.analysis || '';
