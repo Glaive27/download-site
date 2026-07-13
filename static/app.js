@@ -159,8 +159,8 @@ const BotDetector = (function () {
  * 操作才会触发一次轻量二次验证（ALTCHA）。仅上报聚合特征，绝不发送原始坐标。
  *
  * 相较旧版的增强（针对 Tabbit 等 AI 浏览器）：
- * 1. isTrusted 过滤：JS dispatch 产生的合成事件 isTrusted=false，真人绝不会产生 → 强信号
- * 2. 交互多样性：跟踪真实 click/keydown/scroll/touch；登录后长时间零交互 → 可疑
+ * 1. isTrusted 过滤：JS dispatch 产生的合成事件 isTrusted=false，真人绝不会产生  强信号
+ * 2. 交互多样性：跟踪真实 click/keydown/scroll/touch；登录后长时间零交互  可疑
  * 3. 轨迹真实性：瞬移（超人类速度）、近完美直线、定时间隔均判为机器人特征
  * 4. 修复"无移动=安全"漏洞：旧版样本不足直接返回 risk=0，机器人不移动鼠标即被放过
  * 5. 融合环境指纹：BotDetector 分作为风险下界
@@ -171,9 +171,9 @@ const BehaviorMonitor = (function () {
     const REPORT_INTERVAL = 5000; // 风险上报间隔（ms）
     const MIN_SAMPLES = 20;       // 轨迹分析所需最小样本数
     const MOVE_THRESHOLD = 400;   // 总位移阈值（px），过小视为未移动、不判定轨迹
-    const IDLE_FLAG_SECONDS = 12;     // 登录后超过该时长仍无任何真实交互 → 可疑
+    const IDLE_FLAG_SECONDS = 12;     // 登录后超过该时长仍无任何真实交互  可疑
     const TELEPORT_SPEED = 15;        // px/ms（≈15000px/s），超过视为瞬移（非人类）
-    const SYNTHETIC_FLAG_THRESHOLD = 5; // 合成事件数超过该值 → 强机器人信号
+    const SYNTHETIC_FLAG_THRESHOLD = 5; // 合成事件数超过该值  强机器人信号
 
     let samples = [];
     let lastT = 0;
@@ -374,7 +374,7 @@ const MouseTrajectoryVerifier = (function () {
     const TELEPORT_SPEED = 12;       // px/ms，超过视为瞬移（非人类）
     const TARGET_POINTS = 90;        // 采样充足即终判
     const MAX_TIME_MS = 15000;       // 最长验证时长
-    const CONF_STABLE_ROUNDS = 6;    // 置信度连续稳定轮数 → 终判
+    const CONF_STABLE_ROUNDS = 6;    // 置信度连续稳定轮数  终判
     const HUMAN_THRESHOLD = 0.6;     // 人类置信度阈值
 
     let canvas, ctx, hint, gaugeFill, confVal, resultBox, retryBtn, confirmBtn, confirmHint;
@@ -414,7 +414,7 @@ const MouseTrajectoryVerifier = (function () {
     let autoTimer = null;
 
     // 持续检测的区间与稳定性计数器
-    const BOT_THRESHOLD = 0.35;       // 低于此且连续稳定 → 判定机器人
+    const BOT_THRESHOLD = 0.35;       // 低于此且连续稳定  判定机器人
     const AUTO_STABLE = 4;            // 连续 N 轮处于同一区间才切换标记状态
     const AUTO_REPORT_MS = 8000;      // 风险上报间隔(ms)
     let autoHumanStreak = 0;          // 连续 ≥ HUMAN_THRESHOLD 的轮数
@@ -501,9 +501,9 @@ const MouseTrajectoryVerifier = (function () {
      * 核心：持续滑动窗口判定（每次 tick 都用最新窗口数据重算，无终态）。
      *
      * 区间划分：
-     *   conf ≥ HUMAN_THRESHOLD(0.6) → human 区间 → 稳定后尝试清标记
-     *   conf ≤ BOT_THRESHOLD(0.35)  → bot 区间   → 稳定后标记+上报
-     *   其余                       → observing  → 不变更标记状态（保持现状）
+     *   conf ≥ HUMAN_THRESHOLD(0.6)  human 区间  稳定后尝试清标记
+     *   conf ≤ BOT_THRESHOLD(0.35)   bot 区间    稳定后标记+上报
+     *   其余                        observing   不变更标记状态（保持现状）
      *
      * 关键特性：
      * - 即使之前判过 human，只要后续窗口持续落入 bot 区间就立刻标 bot；
@@ -529,7 +529,7 @@ const MouseTrajectoryVerifier = (function () {
             autoBotStreak = 0;
             autoHumanStreak++;
             if (autoHumanStreak >= AUTO_STABLE) {
-                // 连续足够多轮都是人类特征 → 确认真人，尝试清标记
+                // 连续足够多轮都是人类特征  确认真人，尝试清标记
                 tryClearBehaviorFlag(f, conf);
                 autoHumanStreak = 0;  // 重置但保持监测（不清除 autoActive）
             }
@@ -538,7 +538,7 @@ const MouseTrajectoryVerifier = (function () {
             autoHumanStreak = 0;
             autoBotStreak++;
             if (autoBotStreak >= AUTO_STABLE) {
-                // 连续足够多轮都是机器人特征 → 确认机器人，标记+上报
+                // 连续足够多轮都是机器人特征  确认机器人，标记+上报
                 tryFlagAsBot(f, conf);
                 autoBotStreak = 0;  // 重置但保持监测
             }
@@ -787,7 +787,7 @@ const MouseTrajectoryVerifier = (function () {
             const isHuman = verdict === 'human';
             resultBox.className = 'traj-result ' + (isHuman ? 'human' : 'bot');
             resultBox.innerHTML = `
-                <div class="traj-result-icon">${isHuman ? '✅' : '🤖'}</div>
+                <div class="traj-result-icon">${isHuman ? '' : ''}</div>
                 <div class="traj-result-title">${isHuman ? '验证通过：判定为真人' : '验证未通过：判定为自动化脚本'}</div>
                 <div class="traj-result-desc">
                     ${isHuman
@@ -975,7 +975,7 @@ function requestTrajectoryReverify() {
 
     initStatsTabs();  // 绑定数据记录标签页切换
 
-    // 会话异常弹窗确认 → 强制登出
+    // 会话异常弹窗确认  强制登出
     const anomalyConfirm = document.getElementById('anomaly-confirm');
     if (anomalyConfirm) {
         anomalyConfirm.addEventListener('click', () => {
@@ -985,7 +985,7 @@ function requestTrajectoryReverify() {
         });
     }
 
-    // 未登录下载 → 弹窗提示，并提供「去登录 / 去注册」入口
+    // 未登录下载  弹窗提示，并提供「去登录 / 去注册」入口
     const loginRequiredModal = document.getElementById('login-required-modal');
     if (loginRequiredModal) {
         const hideLoginRequired = () => loginRequiredModal.classList.remove('active');
@@ -1008,7 +1008,7 @@ function requestTrajectoryReverify() {
         });
     }
 
-    // 主界面「当前在线」徽章点击 → 弹出在线用户列表
+    // 主界面「当前在线」徽章点击  弹出在线用户列表
     const onlineBadge = document.getElementById('online-badge');
     if (onlineBadge) {
         onlineBadge.addEventListener('click', openOnlineUsersModal);
@@ -1069,7 +1069,7 @@ async function refreshFiles() {
             : (error && error.message ? error.message : '获取文件列表失败');
         listEl.innerHTML = `
             <div class="empty file-list-error">
-                <span>⚠️ ${escapeHtml(msg)}</span>
+                <span>${escapeHtml(msg)}</span>
                 <button class="btn btn-primary btn-sm" id="retry-files-btn" type="button">重试</button>
             </div>`;
         const retryBtn = document.getElementById('retry-files-btn');
@@ -1152,7 +1152,7 @@ function renderFiles(files) {
                                     删除
                                 </button>
                                 <button class="btn btn-edit-desc" data-series="${escapeHtml(group.series)}" data-filename="${escapeHtml(file.name)}" title="编辑简介">
-                                    ✎ 简介
+                                     简介
                                 </button>
                             ` : ''}
                         </div>
@@ -1189,7 +1189,7 @@ function bindAdminFileActions() {
         });
     });
 
-    // 简介编辑：点击「✎ 简介」按钮展开编辑区
+    // 简介编辑：点击「简介」按钮展开编辑区
     document.querySelectorAll('.btn-edit-desc').forEach(btn => {
         btn.addEventListener('click', () => {
             const card = btn.closest('.file-card');
@@ -1257,13 +1257,13 @@ function showDownloadToast(filename, state, title) {
     const titleEl = document.getElementById('download-toast-title');
     const fileEl = document.getElementById('download-toast-file');
     if (!toast) return;
-    const icons = { downloading: '⏳', done: '✅', warn: '⚠️' };
+    const icons = { downloading: '', done: '', warn: '' };
     toast.classList.remove('hidden', 'warn', 'done');
     if (state === 'warn') toast.classList.add('warn');
     if (state === 'done') toast.classList.add('done');
-    icon.textContent = icons[state] || '⏳';
+    icon.textContent = icons[state] || '';
     if (state === 'downloading') {
-        icon.innerHTML = '<span class="spin">⏳</span>';
+        icon.innerHTML = '<span class="spin"></span>';
     }
     titleEl.textContent = title;
     fileEl.textContent = filename || '';
@@ -1364,7 +1364,7 @@ function bindDownloadTracking() {
                 authFetch(`/api/download-log/${encodeURIComponent(filename)}`, {
                     method: 'POST',
                 }).catch(() => { /* 统计失败不影响下载 */ });
-                showDownloadToast(filename, 'done', '✅ 下载已开始，请到下载列表查看');
+                showDownloadToast(filename, 'done', '下载已开始，请到下载列表查看');
             } else {
                 showDownloadToast(filename, 'warn', '下载失败，请先登录后重试');
             }
@@ -1618,8 +1618,8 @@ function renderStats(data) {
         ? topFiles.map(f => `<div class="db-rank-row"><span>${escapeHtml(f.name)}</span><span class="m">${f.downloads} 次</span></div>`).join('')
         : '<div class="db-muted">暂无</div>';
     document.getElementById('db-top-list').innerHTML =
-        `<div style="margin-bottom:10px"><div class="db-muted" style="margin-bottom:4px">👤 活跃用户</div>${tu}</div>` +
-        `<div><div class="db-muted" style="margin-bottom:4px">📦 热门文件</div>${tf}</div>`;
+        `<div style="margin-bottom:10px"><div class="db-muted" style="margin-bottom:4px">活跃用户</div>${tu}</div>` +
+        `<div><div class="db-muted" style="margin-bottom:4px">热门文件</div>${tf}</div>`;
 
     // ---- 文件下载 ----
     const files = (data.files || []).slice().sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
@@ -1686,7 +1686,7 @@ function renderStats(data) {
                 ? '<span class="db-badge admin">管理员</span>'
                 : '<span class="db-badge user">用户</span>';
             const risk = u.high_risk ? ' <span class="db-badge risk">高危</span>' : '';
-            const loc = u.ip_location ? `<span class="db-badge loc">📍 ${escapeHtml(u.ip_location)}</span>` : '';
+            const loc = u.ip_location ? `<span class="db-badge loc">${escapeHtml(u.ip_location)}</span>` : '';
             return `<tr class="db-clickable" data-user="${escapeHtml(un)}">
                 <td><b>${escapeHtml(un)}</b> ${role}${risk}</td>
                 <td>${d}</td>
@@ -1699,7 +1699,7 @@ function renderStats(data) {
         document.getElementById('db-users-body').innerHTML =
             `<table class="db-table"><thead><tr><th>用户（点击查看历史）</th><th>累计下载</th><th>已下载/总数</th><th>归属地</th><th>最近登录</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 
-        // 点击行 → 下钻；点击删除 → 删除账号
+        // 点击行  下钻；点击删除  删除账号
         document.getElementById('db-users-body').querySelectorAll('tr.db-clickable').forEach(tr => {
             tr.addEventListener('click', (e) => {
                 if (e.target.closest('.db-del')) return;
@@ -1730,7 +1730,7 @@ function renderStats(data) {
     // ---- 风险用户 ----
     const riskList = (data.users || []).filter(u => u.high_risk);
     if (!riskList.length) {
-        document.getElementById('db-risk-body').innerHTML = '<div class="db-empty">🎉 当前无高危用户</div>';
+        document.getElementById('db-risk-body').innerHTML = '<div class="db-empty"> 当前无高危用户</div>';
     } else {
         const rows = riskList.map(u => {
             const ud = (data.user_downloads && data.user_downloads[u.username]) || {};
@@ -1738,7 +1738,7 @@ function renderStats(data) {
                 <td><b>${escapeHtml(u.username)}</b></td>
                 <td>${u.download_count || 0}</td>
                 <td>${ud.downloaded_files || 0}/${ud.total_files || data.total_files_site || '?'} <span class="db-muted">(${ud.ratio || 0}%)</span></td>
-                <td>${u.ip_location ? `<span class="db-badge loc">📍 ${escapeHtml(u.ip_location)}</span>` : '<span class="db-muted">未知</span>'}</td>
+                <td>${u.ip_location ? `<span class="db-badge loc">${escapeHtml(u.ip_location)}</span>` : '<span class="db-muted">未知</span>'}</td>
                 <td class="db-muted">${dbTime(u.last_login)}</td>
             </tr>`;
         }).join('');
@@ -1892,7 +1892,7 @@ function renderUserHistory(data) {
 
     // 排序按钮文案
     const sortBtn = document.getElementById('stats-history-sort');
-    sortBtn.textContent = historyOrder === 'desc' ? '按时间 ↓ 最新优先' : '按时间 ↑ 最早优先';
+    sortBtn.textContent = historyOrder === 'desc' ? '按时间  最新优先' : '按时间  最早优先';
 }
 
 /**
@@ -2350,14 +2350,14 @@ function updateOnlineBadge() {
 /**
  * 会话状态轮询：已登录用户定期向服务端确认账号仍有效。
  * - 账号被管理员删除后，/api/session/status 返回 401（get_current_user 找不到用户）。
- *   若此时 JWT 尚未过期 → 判定为账号被移除/撤销，弹出「异常行为检测」提示并登出。
+ *   若此时 JWT 尚未过期  判定为账号被移除/撤销，弹出「异常行为检测」提示并登出。
  * - 正常返回时同步 behaviorFlagged 状态。
  */
 const SESSION_STATUS_INTERVAL = 5000;  // 每 5 秒探一次（数秒内感知账号失效）
 
 /**
  * 解析 JWT 判断令牌是否仍在有效期内（不验签，仅读 exp）。
- * 用于区分 401 的成因：令牌未过期却被拒 → 账号被删/撤销；令牌已过期 → 自然失效。
+ * 用于区分 401 的成因：令牌未过期却被拒  账号被删/撤销；令牌已过期  自然失效。
  */
 function tokenIsUnexpired() {
     const token = localStorage.getItem(TOKEN_KEY);
@@ -2383,10 +2383,10 @@ async function pollSessionStatus() {
         if (res.status === 401) {
             stopSessionStatusPoll();
             if (tokenIsUnexpired()) {
-                // 令牌未过期却被拒 → 账号被删除/撤销，弹出异常行为检测提示
+                // 令牌未过期却被拒  账号被删除/撤销，弹出异常行为检测提示
                 showSessionAnomaly();
             } else {
-                // 令牌自然过期 → 静默登出
+                // 令牌自然过期  静默登出
                 logout();
             }
             return;
@@ -2495,7 +2495,7 @@ function renderOnlineUsers(list) {
     }
     el.innerHTML = list.map(u => `
         <li>
-            <span class="online-users-name">${escapeHtml(u.username)}${u.username !== '匿名访客' ? ' 👤' : ' 🌐'}</span>
+            <span class="online-users-name">${escapeHtml(u.username)}</span>
             <span class="online-users-time">${dbTime(u.last_active_at)}</span>
         </li>
     `).join('');
@@ -2582,7 +2582,7 @@ function round3(n) {
 
 /**
  * 计算序列的直方图熵（以 2 为底），衡量取值的多样性。
- * 人类轨迹特征多样 → 熵高；机械化重复 → 熵低（趋近 0）。
+ * 人类轨迹特征多样  熵高；机械化重复  熵低（趋近 0）。
  * @param {number[]} arr
  * @param {number} buckets
  * @returns {number}
@@ -2594,7 +2594,7 @@ function entropy(arr, buckets) {
         if (v < min) min = v;
         if (v > max) max = v;
     }
-    if (min === max) return 0;  // 全部相同 → 无信息量
+    if (min === max) return 0;  // 全部相同  无信息量
     const counts = new Array(buckets).fill(0);
     for (const v of arr) {
         let idx = Math.floor(((v - min) / (max - min)) * buckets);

@@ -19,7 +19,7 @@
     </div>
 
     <div class="download-toast hidden" id="download-toast" role="status" aria-live="polite">
-        <span class="download-toast-icon" id="download-toast-icon">⏳</span>
+        <span class="download-toast-icon" id="download-toast-icon"></span>
         <div class="download-toast-body">
             <div class="download-toast-title" id="download-toast-title">正在下载…</div>
             <div class="download-toast-file" id="download-toast-file"></div>
@@ -71,7 +71,7 @@
     <div class="modal-overlay" id="notice-modal">
         <div class="modal notice-card" role="alertdialog" aria-modal="true" aria-labelledby="notice-title">
             <button class="modal-close" id="notice-close" aria-label="关闭">&times;</button>
-            <div class="notice-icon">📢</div>
+            <div class="notice-icon"></div>
             <h2 class="notice-title" id="notice-title">温馨提示</h2>
             <div class="notice-body">
                 <p>欢迎使用 Glaive 文件下载中心。请在使用前阅读以下说明：</p>
@@ -115,7 +115,7 @@
     <div class="modal-overlay" id="behavior-modal">
         <div class="modal glass-card behavior-card" role="dialog" aria-modal="true" aria-labelledby="behavior-title">
             <button class="modal-close" id="behavior-close" aria-label="关闭">&times;</button>
-            <div class="behavior-icon">🛡️</div>
+            <div class="behavior-icon"></div>
             <h2 class="behavior-title" id="behavior-title">行为异常安全验证</h2>
             <p class="behavior-desc">
                 系统通过分析<strong>鼠标轨迹连续性、交互事件真实性与操作环境特征</strong>，检测到当前会话存在自动化操作特征
@@ -129,7 +129,7 @@
 
     <div class="modal-overlay" id="session-anomaly-modal">
         <div class="modal glass-card behavior-card anomaly-card" role="alertdialog" aria-modal="true" aria-labelledby="anomaly-title">
-            <div class="behavior-icon anomaly-icon">⚠️</div>
+            <div class="behavior-icon anomaly-icon"></div>
             <h2 class="behavior-title" id="anomaly-title">检测到该账号异常，已自动注销</h2>
             <p class="behavior-desc">
                 系统检测到该账号的访问状态已失效，可能是账号被移除或存在异常操作特征。
@@ -142,7 +142,7 @@
     <div class="modal-overlay" id="login-required-modal">
         <div class="modal glass-card behavior-card login-required-card" role="alertdialog" aria-modal="true" aria-labelledby="login-required-title">
             <button class="modal-close" id="login-required-close" aria-label="关闭">&times;</button>
-            <div class="behavior-icon login-required-icon">🔒</div>
+            <div class="behavior-icon login-required-icon"></div>
             <h2 class="behavior-title" id="login-required-title">请先登录后再下载</h2>
             <p class="behavior-desc">
                 下载文件需要先登录账号。请先登录或注册一个账号，即可正常下载本站提供的文件。
@@ -158,7 +158,7 @@
     <div class="modal-overlay" id="online-users-modal">
         <div class="modal glass-card behavior-card online-users-card" role="dialog" aria-modal="true" aria-labelledby="online-users-title">
             <button class="modal-close" id="online-users-close" aria-label="关闭">&times;</button>
-            <div class="behavior-icon online-users-icon">🟢</div>
+            <div class="behavior-icon online-users-icon"></div>
             <h2 class="behavior-title" id="online-users-title">当前在线用户</h2>
             <p class="online-users-hint">以下为最近 60 秒内有活动的会话（每 5 秒自动刷新）</p>
             <ul class="online-users-list" id="online-users-list">
@@ -205,7 +205,7 @@
             <button class="modal-close" id="stats-close" aria-label="关闭">&times;</button>
             <div class="stats-modal-head">
                 <h2 class="stats-title" id="stats-title">数据记录</h2>
-                <button class="stats-back-btn hidden" id="stats-back" type="button">← 返回</button>
+                <button class="stats-back-btn hidden" id="stats-back" type="button">返回</button>
             </div>
 
             <div class="stats-content" id="stats-content">
@@ -217,12 +217,12 @@
                 <!-- 趋势 + 排行榜 -->
                 <div class="db-two-col">
                     <div class="db-section">
-                        <h3 class="db-section-title">📈 下载量 / 访问人数 趋势</h3>
+                        <h3 class="db-section-title">下载量 / 访问人数 趋势</h3>
                         <div id="db-trend-downloads"></div>
                         <div id="db-trend-visitors" style="margin-top:8px"></div>
                     </div>
                     <div class="db-section">
-                        <h3 class="db-section-title">🏆 下载排行榜</h3>
+                        <h3 class="db-section-title">下载排行榜</h3>
                         <div id="db-top-list"></div>
                     </div>
                 </div>
@@ -230,12 +230,12 @@
                 <!-- 标签页 -->
                 <div class="db-section">
                     <div class="db-tabs">
-                        <div class="db-tab active" data-tab="files">📦 文件下载</div>
-                        <div class="db-tab" data-tab="series">🗂 系列聚合</div>
-                        <div class="db-tab" data-tab="users">👤 用户概览</div>
-                        <div class="db-tab" data-tab="risk">⚠ 风险用户</div>
-                        <div class="db-tab" data-tab="matrix">🔗 用户×文件</div>
-                        <div class="db-tab" data-tab="events">⚡ 实时事件</div>
+                        <div class="db-tab active" data-tab="files">文件下载</div>
+                        <div class="db-tab" data-tab="series">系列聚合</div>
+                        <div class="db-tab" data-tab="users">用户概览</div>
+                        <div class="db-tab" data-tab="risk">风险用户</div>
+                        <div class="db-tab" data-tab="matrix">用户×文件</div>
+                        <div class="db-tab" data-tab="events">实时事件</div>
                     </div>
                     <div class="db-pane active" id="db-pane-files"><div id="db-files-body" class="db-empty">加载中…</div></div>
                     <div class="db-pane" id="db-pane-series"><div id="db-series-body" class="db-empty">加载中…</div></div>
@@ -256,7 +256,7 @@
                 </div>
                 <div class="stats-history-toolbar">
                     <span class="stats-history-count" id="stats-history-count"></span>
-                    <button class="stats-sort-btn" id="stats-history-sort" type="button">按时间 ↓ 最新优先</button>
+                    <button class="stats-sort-btn" id="stats-history-sort" type="button">按时间  最新优先</button>
                 </div>
                 <div class="stats-history-table-wrap">
                     <table class="stats-history-table">
