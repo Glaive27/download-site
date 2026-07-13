@@ -20,10 +20,11 @@ from urllib.parse import quote
 
 import logging
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, Body
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import httpx
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -50,6 +51,11 @@ ACCOUNT_RISK_DAYS = int(os.environ.get("ACCOUNT_RISK_DAYS", "5"))
 ACCOUNT_DELETE_DAYS = int(os.environ.get("ACCOUNT_DELETE_DAYS", "10"))
 # 后台清理任务的扫描间隔（秒），默认 1 小时扫描一次
 ACCOUNT_SWEEP_INTERVAL_SECONDS = int(os.environ.get("ACCOUNT_SWEEP_INTERVAL_SECONDS", "3600"))
+
+
+class AnalyzeRisksRequest(BaseModel):
+    """AI 风险分析请求体."""
+    model: str | None = None
 
 # 数据库存储额度（字节）：用于「数据记录」弹窗展示剩余空间进度条。
 # Render 免费 PostgreSQL 实例磁盘上限为 1 GB；若使用更高套餐请相应调大。
@@ -1195,7 +1201,7 @@ async def admin_stats(
 async def admin_analyze_risks(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
-    model: str | None = Body(None, description="可选的 NVIDIA 模型 ID，不传则使用默认模型"),
+    req: AnalyzeRisksRequest | None = None,
 ) -> JSONResponse:
     """管理员专用：调用英伟达 NIM AI 模型分析用户风险.
 
@@ -1308,7 +1314,7 @@ async def admin_analyze_risks(
     )
 
     # ---- 3. 调用英伟达 NIM API ----
-    target_model = model or NVIDIA_RISK_MODEL
+    target_model = (req.model if req else None) or NVIDIA_RISK_MODEL
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
