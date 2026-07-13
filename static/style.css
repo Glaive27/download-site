@@ -24,7 +24,7 @@ html, body {
 
 body {
     background-color: var(--bg);
-    background-image: url("/static/bg-tahoe-dark.webp");
+    background-image: url("https://static.applewalls.com/macOS/macOS%2026%20Tahoe/compress/26-Tahoe-Dark-6K.webp");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
