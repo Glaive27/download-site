@@ -1727,10 +1727,10 @@ function renderStats(data) {
         });
     }
 
-    // ---- 风险用户 ----
+    // ---- 风险用户（含 AI 分析入口） ----
     const riskList = (data.users || []).filter(u => u.high_risk);
     if (!riskList.length) {
-        document.getElementById('db-risk-body').innerHTML = '<div class="db-empty"> 当前无高危用户</div>';
+        document.getElementById('db-risk-body').innerHTML = '<div class="db-empty"> 当前无高危用户（点击「AI 智能分析」获取深度评估）</div>';
     } else {
         const rows = riskList.map(u => {
             const ud = (data.user_downloads && data.user_downloads[u.username]) || {};
@@ -1745,6 +1745,12 @@ function renderStats(data) {
         document.getElementById('db-risk-body').innerHTML =
             `<div class="db-muted" style="margin-bottom:8px">高危定义：注册后从未下载、且超过设定天数未上线。</div>` +
             `<table class="db-table"><thead><tr><th>用户</th><th>累计下载</th><th>已下载/总数</th><th>归属地</th><th>最近登录</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // 绑定 AI 分析按钮（仅绑一次，每次 renderStats 重新渲染后需要重新绑定）
+    const aiBtn = document.getElementById('db-ai-risk-btn');
+    if (aiBtn) {
+        aiBtn.onclick = analyzeRisksAI;
     }
 
     // ---- 用户 × 文件 矩阵 ----
@@ -2499,6 +2505,69 @@ function renderOnlineUsers(list) {
             <span class="online-users-time">${dbTime(u.last_active_at)}</span>
         </li>
     `).join('');
+}
+
+/**
+ * AI 智能风险分析：调用后端 /api/admin/analyze-risks，使用英伟达 DeepSeek V4 Flash
+ * 对所有用户进行风险评估，结果渲染到「风险用户」标签页。
+ */
+async function analyzeRisksAI() {
+    const btn = document.getElementById('db-ai-risk-btn');
+    const status = document.getElementById('db-ai-status');
+    const body = document.getElementById('db-risk-body');
+    if (!btn || !body) return;
+
+    // 防重复点击
+    if (btn.disabled) return;
+    btn.disabled = true;
+    status.className = 'db-ai-status loading';
+    status.textContent = 'AI 分析中，请稍候…';
+
+    try {
+        const res = await authFetch('/api/admin/analyze-risks', { method: 'POST' });
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.detail || (typeof data === 'string' ? data : '请求失败'));
+        }
+
+        const summary = data.analysis || '';
+        const users = (data.users || []).sort((a, b) => {
+            const order = { '高': 0, '中': 1, '低': 2 };
+            return (order[a.risk_level] ?? 3) - (order[b.risk_level] ?? 3);
+        });
+
+        let html = '';
+        if (summary) {
+            html += `<div class="db-ai-summary">${escapeHtml(summary)}</div>`;
+        }
+        if (!users.length) {
+            html += '<div class="db-empty">AI 未返回分析结果</div>';
+        } else {
+            const rows = users.map(u => {
+                const levelClass = u.risk_level === '高' ? 'risk-high'
+                    : u.risk_level === '中' ? 'risk-mid' : 'risk-low';
+                return `<tr class="db-ai-risk-${levelClass}">
+                    <td><b>${escapeHtml(u.username)}</b></td>
+                    <td><span class="db-badge ${u.risk_level === '高' ? 'danger' : u.risk_level === '中' ? 'warn' : ''}">${u.risk_level}风险</span></td>
+                    <td>${escapeHtml(u.reason || '')}</td>
+                </tr>`;
+            }).join('');
+            html += `<table class="db-table"><thead><tr><th>用户名</th><th>风险等级</th><th>AI 分析原因</th></tr></thead><tbody>${rows}</tbody></table>`;
+            html += `<div class="db-muted" style="margin-top:8px;font-size:0.75rem">模型: ${data.model || 'N/A'} | 分析时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</div>`;
+        }
+
+        body.innerHTML = html;
+        status.className = 'db-ai-status ok';
+        status.textContent = '分析完成';
+
+    } catch (err) {
+        body.innerHTML = `<div class="db-empty" style="color:#e74c3c">${escapeHtml(err.message)}</div>`;
+        status.className = 'db-ai-status error';
+        status.textContent = '分析失败';
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 /**

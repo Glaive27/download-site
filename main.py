@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import threading
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, Body
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -53,6 +55,11 @@ ACCOUNT_SWEEP_INTERVAL_SECONDS = int(os.environ.get("ACCOUNT_SWEEP_INTERVAL_SECO
 # Render 免费 PostgreSQL 实例磁盘上限为 1 GB；若使用更高套餐请相应调大。
 # 该值仅用于前端展示剩余额度，不影响数据库实际写入（由数据库自身限制）。
 DATABASE_QUOTA_BYTES = int(os.environ.get("DATABASE_QUOTA_BYTES", str(1024 * 1024 * 1024)))
+
+# 英伟达 NIM API（用于 AI 风险用户分析）
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
+NVIDIA_RISK_MODEL = os.environ.get("NVIDIA_RISK_MODEL", "deepseek-ai/deepseek-v4-flash")
 
 
 logger = logging.getLogger(__name__)
@@ -1157,6 +1164,169 @@ async def admin_stats(
         "matrix": matrix,
         "recent_events": recent_events,
     })
+
+
+@app.post("/api/admin/analyze-risks")
+async def admin_analyze_risks(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员专用：调用英伟达 NIM AI 模型分析用户风险.
+
+    收集所有用户的行为数据（注册时间、登录频率、下载模式、IP 归属地、
+    行为风险分等），组装为结构化 JSON，发送给 deepseek-v4-flash 模型，
+    由 AI 输出每人的风险评估结果（风险等级 + 原因）。
+
+    返回格式::
+
+        {
+          "analysis": "AI 生成的整体分析文本",
+          "users": [
+            {"username": "...", "risk_level": "高/中/低", "reason": "..."},
+            ...
+          ],
+          "model": "deepseek-ai/deepseek-v4-flash"
+        }
+    """
+    if not NVIDIA_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="未配置 NVIDIA_API_KEY，请在环境变量中设置。",
+        )
+
+    # ---- 1. 收集全量用户数据 ----
+    now = datetime.now(timezone.utc)
+    all_users = db.query(User).order_by(User.id).all()
+
+    user_data_list = []
+    for u in all_users:
+        # 该用户的下载历史
+        logs = (
+            db.query(DownloadLog, FileRecord)
+            .join(FileRecord, DownloadLog.file_record_id == FileRecord.id)
+            .filter(DownloadLog.user_id == u.id)
+            .order_by(DownloadLog.downloaded_at.desc())
+            .limit(50)
+            .all()
+        )
+        dl_history = []
+        for log, rec in logs:
+            fn = rec.original_filename or f"{rec.version}{Path(rec.filename).suffix}"
+            dl_history.append({
+                "file": fn,
+                "series": rec.series or "",
+                "time": log.downloaded_at.isoformat(),
+            })
+
+        reg_age_days = (now - u.created_at).total_seconds() / 86400 if u.created_at else 0
+        login_age_days = (now - u.last_login).total_seconds() / 86400 if u.last_login else reg_age_days
+
+        user_data_list.append({
+            "username": u.username,
+            "role": u.role,
+            "registered_at": u.created_at.isoformat() if u.created_at else None,
+            "reg_age_days": round(reg_age_days, 1),
+            "last_login": u.last_login.isoformat() if u.last_login else None,
+            "days_since_login": round(login_age_days, 1),
+            "download_count": u.download_count or 0,
+            "high_risk_flag": bool(u.high_risk),
+            "behavior_risk_score": round(u.behavior_risk, 3) if u.behavior_risk is not None else 0.0,
+            "ip_location": u.last_login_location or "",
+            "recent_downloads": dl_history[:20],
+        })
+
+    # 站点总体统计（供 AI 参考）
+    total_dl = sum(r.download_count or 0 for r in db.query(FileRecord).all())
+    total_visitors = db.query(UniqueVisitor).count()
+
+    payload_json = {
+        "site_stats": {
+            "total_downloads": total_dl,
+            "total_visitors": total_visitors,
+            "total_users": len(all_users),
+            "analysis_time": now.isoformat(),
+        },
+        "users": user_data_list,
+    }
+
+    # ---- 2. 构建 prompt ----
+    system_prompt = (
+        "你是一个专业的网络安全与用户行为分析师。"
+        "以下是一个文件下载网站的全部用户行为数据（JSON 格式）。\n\n"
+        "请分析每个用户的风险等级，判断依据包括但不限于：\n"
+        "- 注册后长期不活跃或从未下载（可能是注册占位/恶意账号）\n"
+        "- 短时间内大量下载所有文件（可能爬虫/批量盗取）\n"
+        "- IP 归属地异常或不稳定\n"
+        "- 行为风险分高（疑似机器人）\n"
+        "- 登录频率异常（过于频繁或异常间隔）\n"
+        "- 下载时间集中在非正常时段\n\n"
+        "输出要求（严格 JSON 格式）：\n"
+        "{\n"
+        '  "analysis": "整体风险概况总结（100字以内中文）",\n'
+        '  "users": [\n'
+        '    {\n'
+        '      "username": "用户名",\n'
+        '      "risk_level": "高/中/低",\n'
+        '      "reason": "一句话原因说明（中文，30字以内）"\n'
+        '    }\n'
+        "  ]\n"
+        "}\n\n"
+        "只输出上述 JSON，不要包含任何其他文字、markdown 标记或代码块。"
+    )
+
+    # ---- 3. 调用英伟达 NIM API ----
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{NVIDIA_API_BASE}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": NVIDIA_RISK_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(payload_json, ensure_ascii=False, indent=2),
+                        },
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 4096,
+                    "top_p": 0.95,
+                },
+            )
+            resp.raise_for_status()
+            result = resp.json()
+
+        ai_text = result["choices"][0]["message"]["content"].strip()
+
+        # 清理可能的 markdown 代码块包裹
+        if ai_text.startswith("```"):
+            ai_text = ai_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        analysis = json.loads(ai_text)
+
+        return JSONResponse({
+            "analysis": analysis.get("analysis", ""),
+            "users": analysis.get("users", []),
+            "model": NVIDIA_RISK_MODEL,
+            "raw_payload": payload_json,
+        })
+
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            err_body = e.response.json()
+            detail = err_body.get("error", {}).get("message", str(err_body))
+        except Exception:
+            detail = e.response.text[:500]
+        raise HTTPException(status_code=e.response.status_code, detail=f"AI API 错误: {detail}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="AI 返回了无法解析的响应，请重试。")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI 分析失败: {str(e)}")
 
 
 @app.get("/api/admin/users/{username}/downloads")
