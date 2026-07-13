@@ -100,6 +100,21 @@ def login(
             detail="检测到自动化操作环境，请求已被拦截",
         )
 
+    # 先判断账号是否存在：
+    # 账号存在但密码错 → 返回「用户名或密码错误」（普通内联提示）；
+    # 账号不存在（从未注册，或注册后被管理员注销）→ 返回结构化 code=ACCOUNT_NOT_FOUND，
+    # 前端据此弹出「该账号异常/已注销」弹窗（与会话异常弹窗同款）。
+    existing = db.query(User).filter(User.username == form_data.username).first()
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "ACCOUNT_NOT_FOUND",
+                "message": "该账号不存在或已被注销",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(

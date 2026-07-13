@@ -1936,8 +1936,17 @@ async function handleLogin(event) {
         });
 
         if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.detail || '登录失败');
+            const data = await response.json().catch(() => ({}));
+            const detail = data.detail;
+            // 账号不存在或已被管理员注销：弹出「账号异常/已注销」弹窗（与会话异常同款）
+            if (detail && typeof detail === 'object' && detail.code === 'ACCOUNT_NOT_FOUND') {
+                closeAuthModal();
+                showAccountInvalid(detail.message);
+                return;
+            }
+            // 其余错误（密码错误 / 人机验证 / 限流等）：内联提示
+            const msg = (detail && typeof detail === 'object') ? (detail.message || '登录失败') : (detail || '登录失败');
+            throw new Error(msg);
         }
 
         const data = await response.json();
@@ -2373,7 +2382,36 @@ function stopSessionStatusPoll() {
  */
 function showSessionAnomaly() {
     const modal = document.getElementById('session-anomaly-modal');
-    if (modal) modal.classList.add('active');
+    if (!modal) return;
+    // 复位为「会话异常」文案（该弹窗也被登录场景复用，需还原以免文案串场）
+    const titleEl = document.getElementById('anomaly-title');
+    const descEl = modal.querySelector('.behavior-desc');
+    if (titleEl) titleEl.textContent = '检测到该账号异常，已自动注销';
+    if (descEl) {
+        descEl.textContent = '系统检测到该账号的访问状态已失效，可能是账号被移除或存在异常操作特征。'
+            + '为保障账号安全，您已自动登出。如有疑问，请联系管理员。';
+    }
+    modal.classList.add('active');
+    BehaviorMonitor.stop();
+}
+
+/**
+ * 登录时账号不存在 / 已被注销：复用「账号异常」弹窗（与会话异常同款样式）。
+ * 场景：用户注册后长期未登录，账号被管理员删除，之后再登录即命中此提示。
+ * @param {string} [message] 可选的补充说明文本
+ */
+function showAccountInvalid(message) {
+    const modal = document.getElementById('session-anomaly-modal');
+    if (!modal) return;
+    const titleEl = document.getElementById('anomaly-title');
+    const descEl = modal.querySelector('.behavior-desc');
+    if (titleEl) titleEl.textContent = '该账号不存在或已被注销';
+    if (descEl) {
+        descEl.textContent = message
+            ? `${message}。该账号可能因长期未登录被管理员移除，或存在异常操作特征。如需继续使用，请重新注册或联系管理员。`
+            : '未找到该账号，它可能因长期未登录被管理员移除，或存在异常操作特征。如需继续使用，请重新注册或联系管理员。';
+    }
+    modal.classList.add('active');
     BehaviorMonitor.stop();
 }
 
