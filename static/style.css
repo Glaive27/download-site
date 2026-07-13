@@ -24,6 +24,11 @@ html, body {
 
 body {
     background-color: var(--bg);
+    background-image: url("/static/bg-tahoe-dark.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
     color: var(--text);
     font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
     display: flex;
