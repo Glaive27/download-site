@@ -145,3 +145,20 @@ class DownloadLog(Base):  # noqa: D101
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<DownloadLog(id={self.id}, user_id={self.user_id}, file_record_id={self.file_record_id})>"
+
+
+class SiteConfig(Base):  # noqa: D101
+    """站点键值配置表.
+
+    用于存储需要持久化、但又不方便写死在代码或环境变量中的配置项
+    （如第三方 API Key）。优先读取环境变量，未设置时回退到本表。
+    """
+
+    __tablename__ = "site_config"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(String(1024), nullable=False, default="")
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:  # noqa: D105
+        return f"<SiteConfig(key={self.key})>"

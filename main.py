@@ -31,7 +31,7 @@ from sqlalchemy import text
 load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
-from auth.models import DownloadLog, FileRecord, Series, UniqueVisitor, User, _utcnow
+from auth.models import DownloadLog, FileRecord, Series, SiteConfig, UniqueVisitor, User, _utcnow
 from auth.schemas import BehaviorReport, BehaviorReverify, TrajectoryVerdict
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
@@ -57,9 +57,30 @@ ACCOUNT_SWEEP_INTERVAL_SECONDS = int(os.environ.get("ACCOUNT_SWEEP_INTERVAL_SECO
 DATABASE_QUOTA_BYTES = int(os.environ.get("DATABASE_QUOTA_BYTES", str(1024 * 1024 * 1024)))
 
 # 英伟达 NIM API（用于 AI 风险用户分析）
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+# 优先读取环境变量，未设置时回退到数据库 site_config 表（key="nvidia_api_key"）
 NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
 NVIDIA_RISK_MODEL = os.environ.get("NVIDIA_RISK_MODEL", "deepseek-ai/deepseek-v4-flash")
+
+
+def _get_nvidia_api_key(db: Session | None = None) -> str:
+    """获取英伟达 API Key：环境变量优先，否则从数据库 site_config 读取.
+
+    若传入 db 会话则直接查询；否则临时创建一次性会话查询。
+    """
+    env_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    from auth.models import SiteConfig
+    if db is not None:
+        row = db.query(SiteConfig).filter(SiteConfig.key == "nvidia_api_key").first()
+        return row.value.strip() if row and row.value else ""
+    try:
+        with SessionLocal() as s:
+            row = s.query(SiteConfig).filter(SiteConfig.key == "nvidia_api_key").first()
+            return row.value.strip() if row and row.value else ""
+    except Exception:
+        return ""
 
 
 logger = logging.getLogger(__name__)
@@ -1188,10 +1209,11 @@ async def admin_analyze_risks(
           "model": "deepseek-ai/deepseek-v4-flash"
         }
     """
-    if not NVIDIA_API_KEY:
+    api_key = _get_nvidia_api_key(db)
+    if not api_key:
         raise HTTPException(
             status_code=500,
-            detail="未配置 NVIDIA_API_KEY，请在环境变量中设置。",
+            detail="未配置英伟达 API Key，请在「系统设置」中填入 NVIDIA_API_KEY。",
         )
 
     # ---- 1. 收集全量用户数据 ----
@@ -1280,7 +1302,7 @@ async def admin_analyze_risks(
             resp = await client.post(
                 f"{NVIDIA_API_BASE}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
@@ -1327,6 +1349,48 @@ async def admin_analyze_risks(
         raise HTTPException(status_code=502, detail="AI 返回了无法解析的响应，请重试。")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 分析失败: {str(e)}")
+
+
+@app.get("/api/admin/config")
+async def get_site_config(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员专用：读取站点配置（API Key 仅以掩码形式返回，不暴露明文）."""
+    row = db.query(SiteConfig).filter(SiteConfig.key == "nvidia_api_key").first()
+    raw = row.value if row else ""
+    masked = ""
+    if raw:
+        masked = raw[:6] + "…" + raw[-4:] if len(raw) > 10 else "已设置"
+    return JSONResponse({
+        "nvidia_api_key_set": bool(raw),
+        "nvidia_api_key_masked": masked,
+        "model": NVIDIA_RISK_MODEL,
+    })
+
+
+@app.post("/api/admin/config")
+async def set_site_config(
+    body: dict,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JSONResponse:
+    """管理员专用：写入站点配置（当前支持设置 nvidia_api_key）.
+
+    使用 upsert 语义：存在则更新，不存在则插入。
+    """
+    api_key = (body.get("nvidia_api_key") or "").strip()
+    if api_key and not api_key.startswith("nvapi-"):
+        raise HTTPException(status_code=400, detail="API Key 格式不正确，应以 nvapi- 开头")
+
+    row = db.query(SiteConfig).filter(SiteConfig.key == "nvidia_api_key").first()
+    if row:
+        row.value = api_key
+    else:
+        row = SiteConfig(key="nvidia_api_key", value=api_key)
+        db.add(row)
+    db.commit()
+    return JSONResponse({"ok": True, "nvidia_api_key_set": bool(api_key)})
 
 
 @app.get("/api/admin/users/{username}/downloads")
