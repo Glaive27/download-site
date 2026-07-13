@@ -59,7 +59,11 @@ DATABASE_QUOTA_BYTES = int(os.environ.get("DATABASE_QUOTA_BYTES", str(1024 * 102
 # 英伟达 NIM API（用于 AI 风险用户分析）
 # 优先读取环境变量，未设置时回退到数据库 site_config 表（key="nvidia_api_key"）
 NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
-NVIDIA_RISK_MODEL = os.environ.get("NVIDIA_RISK_MODEL", "deepseek-ai/deepseek-v4-flash")
+# 可用免费模型（40 RPM 共享限额）：
+#   qwen/qwen3.5-397b-a17b     - 通义千问3.5（397B MoE，中文最强，推荐）
+#   meta/llama-3.3-70b-instruct  - Llama 3.3（60 RPM，英文强）
+#   deepseek-ai/deepseek-v4-flash - DeepSeek V4 轻量版（128K 上下文）
+NVIDIA_RISK_MODEL = os.environ.get("NVIDIA_RISK_MODEL", "qwen/qwen3.5-397b-a17b")
 
 
 def _get_nvidia_api_key(db: Session | None = None) -> str:
@@ -1348,7 +1352,14 @@ async def admin_analyze_risks(
             detail = err_body.get("error", {}).get("message", str(err_body))
         except Exception:
             detail = e.response.text[:500]
-        raise HTTPException(status_code=e.response.status_code, detail=f"AI API 错误: {detail}")
+        # 对限流 / 配额耗尽返回更友好的提示
+        status = e.response.status_code
+        if status in (429, 503) and any(kw in detail.lower() for kw in ("resourceexhausted", "rate limit", "request limit", "quota")):
+            raise HTTPException(
+                status_code=status,
+                detail=f"AI API 临时限流（免费层速率限制，请等待 1-2 分钟后重试）: {detail[:200]}",
+            )
+        raise HTTPException(status_code=status, detail=f"AI API 错误: {detail}")
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="AI 返回了无法解析的响应，请重试。")
     except Exception as e:

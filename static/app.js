@@ -2562,9 +2562,14 @@ async function analyzeRisksAI() {
         status.textContent = '分析完成';
 
     } catch (err) {
-        body.innerHTML = `<div class="db-empty" style="color:#e74c3c">${escapeHtml(err.message)}</div>`;
-        status.className = 'db-ai-status error';
-        status.textContent = '分析失败';
+        const msg = err.message || '';
+        const isRateLimit = msg.includes('限流') || msg.includes('rate limit') || msg.includes('ResourceExhausted');
+        const displayMsg = isRateLimit
+            ? 'AI 服务暂时繁忙（免费层速率限制），请等待 1-2 分钟后点击重试'
+            : msg;
+        body.innerHTML = `<div class="db-empty" style="color:#e74c3c">${escapeHtml(displayMsg)}</div>`;
+        status.className = isRateLimit ? 'db-ai-status warn' : 'db-ai-status error';
+        status.textContent = isRateLimit ? '请稍后重试' : '分析失败';
     } finally {
         btn.disabled = false;
     }

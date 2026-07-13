@@ -1176,6 +1176,7 @@ body {
 .db-ai-status.loading { color: var(--accent); }
 .db-ai-status.error { color: #e74c3c; }
 .db-ai-status.ok { color: #27ae60; }
+.db-ai-status.warn { color: #f39c12; }
 
 /* AI 分析结果 */
 .db-ai-summary {
