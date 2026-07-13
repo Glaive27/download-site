@@ -2524,7 +2524,13 @@ async function analyzeRisksAI() {
     status.textContent = 'AI 分析中，请稍候…';
 
     try {
-        const res = await authFetch('/api/admin/analyze-risks', { method: 'POST' });
+        const modelSel = document.getElementById('db-ai-model');
+        const selModel = modelSel ? modelSel.value : '';
+        const res = await authFetch('/api/admin/analyze-risks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(selModel ? { model: selModel } : {}),
+        });
         const data = await res.json();
 
         if (!res.ok) {

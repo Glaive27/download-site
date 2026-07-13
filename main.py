@@ -1195,12 +1195,15 @@ async def admin_stats(
 async def admin_analyze_risks(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
+    model: str | None = Body(None, description="可选的 NVIDIA 模型 ID，不传则使用默认模型"),
 ) -> JSONResponse:
     """管理员专用：调用英伟达 NIM AI 模型分析用户风险.
 
     收集所有用户的行为数据（注册时间、登录频率、下载模式、IP 归属地、
-    行为风险分等），组装为结构化 JSON，发送给 deepseek-v4-flash 模型，
+    行为风险分等），组装为结构化 JSON，发送给指定的 NVIDIA NIM 模型，
     由 AI 输出每人的风险评估结果（风险等级 + 原因）。
+
+    可通过请求体 ``{"model": "模型ID"}`` 切换模型，不传则使用默认模型。
 
     返回格式::
 
@@ -1210,7 +1213,7 @@ async def admin_analyze_risks(
             {"username": "...", "risk_level": "高/中/低", "reason": "..."},
             ...
           ],
-          "model": "deepseek-ai/deepseek-v4-flash"
+          "model": "使用的模型 ID"
         }
     """
     api_key = _get_nvidia_api_key(db)
@@ -1305,6 +1308,7 @@ async def admin_analyze_risks(
     )
 
     # ---- 3. 调用英伟达 NIM API ----
+    target_model = model or NVIDIA_RISK_MODEL
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
@@ -1314,7 +1318,7 @@ async def admin_analyze_risks(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": NVIDIA_RISK_MODEL,
+                    "model": target_model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {
@@ -1341,7 +1345,7 @@ async def admin_analyze_risks(
         return JSONResponse({
             "analysis": analysis.get("analysis", ""),
             "users": analysis.get("users", []),
-            "model": NVIDIA_RISK_MODEL,
+            "model": target_model,
             "raw_payload": payload_json,
         })
 
