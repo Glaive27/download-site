@@ -1241,9 +1241,11 @@ async def admin_analyze_risks(
             })
 
         # 注：User 模型无独立 created_at，注册时间以 last_login 的初值近似
-        reg_ref = u.last_login or now
-        reg_age_days = (now - reg_ref).total_seconds() / 86400
-        login_age_days = (now - u.last_login).total_seconds() / 86400 if u.last_login else reg_age_days
+        # 数据库读回的 DateTime 为 naive（PG 无时区列），统一转 naive UTC 比较
+        now_naive = now.replace(tzinfo=None)
+        reg_ref = u.last_login or now_naive
+        reg_age_days = (now_naive - reg_ref).total_seconds() / 86400
+        login_age_days = (now_naive - u.last_login).total_seconds() / 86400 if u.last_login else reg_age_days
 
         user_data_list.append({
             "username": u.username,
