@@ -1240,13 +1240,15 @@ async def admin_analyze_risks(
                 "time": log.downloaded_at.isoformat(),
             })
 
-        reg_age_days = (now - u.created_at).total_seconds() / 86400 if u.created_at else 0
+        # 注：User 模型无独立 created_at，注册时间以 last_login 的初值近似
+        reg_ref = u.last_login or now
+        reg_age_days = (now - reg_ref).total_seconds() / 86400
         login_age_days = (now - u.last_login).total_seconds() / 86400 if u.last_login else reg_age_days
 
         user_data_list.append({
             "username": u.username,
             "role": u.role,
-            "registered_at": u.created_at.isoformat() if u.created_at else None,
+            "registered_at": reg_ref.isoformat(),
             "reg_age_days": round(reg_age_days, 1),
             "last_login": u.last_login.isoformat() if u.last_login else None,
             "days_since_login": round(login_age_days, 1),
