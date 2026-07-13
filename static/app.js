@@ -1944,8 +1944,11 @@ async function handleLogin(event) {
                 showAccountInvalid(detail.message);
                 return;
             }
-            // 其余错误（密码错误 / 人机验证 / 限流等）：内联提示
-            const msg = (detail && typeof detail === 'object') ? (detail.message || '登录失败') : (detail || '登录失败');
+            // 其余错误（密码错误 / 人机验证 / 限流等）：内联提示（防御性：detail 可能是任意类型）
+            let msg = '登录失败';
+            if (detail !== null && detail !== undefined) {
+                msg = typeof detail === 'object' ? (detail.message || detail.detail || JSON.stringify(detail)) : String(detail);
+            }
             throw new Error(msg);
         }
 
@@ -1955,7 +1958,9 @@ async function handleLogin(event) {
         showAuthMessage('登录成功', true);
         setTimeout(closeAuthModal, 600);
     } catch (error) {
-        showAuthMessage(error.message, false);
+        // 防御：确保 message 永远是字符串，避免 [Object Object]
+        const errMsg = typeof error.message === 'string' ? error.message : (typeof error.message === 'object' ? JSON.stringify(error.message) : '登录失败');
+        showAuthMessage(errMsg, false);
     }
 }
 
