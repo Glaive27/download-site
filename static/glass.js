@@ -68,7 +68,7 @@
     "uniform vec2 pos;",
     "uniform vec2 resolution;",
     "uniform float diameter;",
-    "uniform float refract;",
+    "uniform float refr;",
     "uniform sampler2D img;",
     "uniform vec4 color;",
     "vec4 sampleWall(vec2 tc) { return texture2D(img, vec2(tc.x, 1.0 - tc.y)); }",
@@ -78,7 +78,7 @@
     "  vec2 tex = texCoord - center;",
     "  float dis2x = dist * 2.0;",
     "  float sq = sqrt(max(1.0 - dis2x * dis2x, 0.0));",
-    "  float num = refract / max(sq, 0.001) - refract;",
+    "  float num = refr / max(sq, 0.001) - refr;",
     "  vec3 col = sampleWall(tex * (1.0 - num) + center).rgb;",
     "  vec3 reb = sampleWall(tex * (1.0 + num) + center).rgb;",
     "  num = abs(num);",
@@ -93,7 +93,7 @@
     "  float alpha = clamp((0.5 - dist) * diameter * 0.5, 0.0, 1.0);",
     "  float rim = smoothstep(0.40, 0.5, dist) * (1.0 - smoothstep(0.5, 0.52, dist));",
     "  col += rim * 0.18;",
-    "  fragColor = mix(vec4(0.0, 0.0, 0.0, clamp(0.53125 - dist, 0.0, 1.0)),",
+    "  gl_FragColor = mix(vec4(0.0, 0.0, 0.0, clamp(0.53125 - dist, 0.0, 1.0)),",
     "                  vec4(col, 1.0), alpha);",
     "}"
   ].join("\n");
@@ -285,7 +285,7 @@
       gl.uniform2f(gl.getUniformLocation(glassProg, "pos"), b.x, b.y);
       gl.uniform1f(gl.getUniformLocation(glassProg, "diameter"), dia);
       gl.uniform1f(
-        gl.getUniformLocation(glassProg, "refract"),
+        gl.getUniformLocation(glassProg, "refr"),
         b.refract + Math.sin(now / 1400 + j) * 0.02
       );
       gl.uniform4f(
