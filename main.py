@@ -226,7 +226,7 @@ def _ensure_schema_migrations() -> None:
     """
     with engine.begin() as conn:
         conn.execute(text(
-            "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS is_beta BOOLEAN NOT NULL DEFAULT 0"
+            "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS is_beta BOOLEAN NOT NULL DEFAULT false"
         ))
 
 
