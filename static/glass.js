@@ -20,8 +20,7 @@
     return;
   }
 
-  var WALLPAPER_URL =
-    "https://static.applewalls.com/macOS/macOS%2026%20Tahoe/compress/26-Tahoe-Dark-6K.webp";
+  var WALLPAPER_URL = "/api/wallpaper";
 
   // ---------- 着色器 ----------
   var BG_VERT = [
