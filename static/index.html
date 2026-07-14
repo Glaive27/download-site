@@ -163,6 +163,23 @@
         </div>
     </div>
 
+    <!-- 加入 Beta 用户确认弹窗 -->
+    <div class="modal-overlay" id="beta-confirm-modal">
+        <div class="modal glass_card behavior-card beta-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="beta-confirm-title">
+            <div class="behavior-icon beta-icon"></div>
+            <h2 class="behavior-title" id="beta-confirm-title">加入 Beta 测试</h2>
+            <p class="behavior-desc">
+                Beta 版本仍在开发中，可能存在 Bug、性能问题或功能变更。<br>
+                勾选后，你将可以下载 Beta 版本，并在页面底部提交 Bug 和建议，帮助改进项目。<br>
+                如果你希望体验更稳定的版本，建议使用正式版。
+            </p>
+            <div class="beta-confirm-actions">
+                <button class="btn btn-ghost" id="beta-confirm-cancel" type="button">取消</button>
+                <button class="btn btn-primary" id="beta-confirm-join" type="button">加入 Beta</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 当前在线用户弹窗 -->
     <div class="modal-overlay" id="online-users-modal">
         <div class="modal glass-card behavior-card online-users-card" role="dialog" aria-modal="true" aria-labelledby="online-users-title">

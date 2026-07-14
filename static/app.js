@@ -1009,6 +1009,30 @@ function requestTrajectoryReverify() {
         });
     }
 
+    // 注册身份选择「开发者」时弹出 Beta 确认框
+    const registerRoleSelect = document.getElementById('register-role');
+    const betaConfirmModal = document.getElementById('beta-confirm-modal');
+    if (registerRoleSelect && betaConfirmModal) {
+        const showBetaConfirm = () => betaConfirmModal.classList.add('active');
+        const hideBetaConfirm = () => betaConfirmModal.classList.remove('active');
+        registerRoleSelect.addEventListener('change', () => {
+            if (registerRoleSelect.value === 'developer') {
+                showBetaConfirm();
+            }
+        });
+        document.getElementById('beta-confirm-cancel').addEventListener('click', () => {
+            registerRoleSelect.value = 'user';
+            hideBetaConfirm();
+        });
+        document.getElementById('beta-confirm-join').addEventListener('click', hideBetaConfirm);
+        betaConfirmModal.addEventListener('click', (e) => {
+            if (e.target === betaConfirmModal) {
+                registerRoleSelect.value = 'user';
+                hideBetaConfirm();
+            }
+        });
+    }
+
     // 主界面「当前在线」徽章点击  弹出在线用户列表
     const onlineBadge = document.getElementById('online-badge');
     if (onlineBadge) {

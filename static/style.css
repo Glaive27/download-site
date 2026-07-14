@@ -1748,6 +1748,29 @@ altcha-widget {
     margin: 6px auto 16px;
 }
 
+/* ===== 加入 Beta 用户确认弹窗 ===== */
+.beta-icon {
+    color: var(--accent);
+}
+
+.beta-confirm-card {
+    max-width: 440px;
+    text-align: center;
+}
+
+.beta-confirm-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 8px;
+}
+
+.beta-confirm-actions .btn {
+    flex: 1;
+    max-width: 160px;
+    justify-content: center;
+}
+
 #behavior-verify {
     width: 100%;
 }
