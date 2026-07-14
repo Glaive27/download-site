@@ -256,6 +256,35 @@
       else if (o.y > H - o.r) { o.y = H - o.r; o.vy = -Math.abs(o.vy); }
     }
 
+    // 球体互相反弹 (二维弹性碰撞, 质量正比于半径平方)
+    var REST = 1.0; // 完全弹性
+    for (var a = 0; a < orbs.length; a++) {
+      for (var b = a + 1; b < orbs.length; b++) {
+        var A = orbs[a], B = orbs[b];
+        var dx = B.x - A.x, dy = B.y - A.y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        var minD = A.r + B.r;
+        if (dist > 0 && dist < minD) {
+          var nx = dx / dist, ny = dy / dist;
+          // 位置分离, 按质量反比推开, 避免粘连
+          var ma = A.r * A.r, mb = B.r * B.r, tot = ma + mb;
+          var overlap = minD - dist;
+          A.x -= nx * overlap * (mb / tot);
+          A.y -= ny * overlap * (mb / tot);
+          B.x += nx * overlap * (ma / tot);
+          B.y += ny * overlap * (ma / tot);
+          // 沿法向的相对速度 (A 相对 B)
+          var vn = (A.vx - B.vx) * nx + (A.vy - B.vy) * ny;
+          if (vn > 0) {
+            // 正在靠近, 施加冲量
+            var j = -(1 + REST) * vn / (1 / ma + 1 / mb);
+            A.vx += (j / ma) * nx; A.vy += (j / ma) * ny;
+            B.vx -= (j / mb) * nx; B.vy -= (j / mb) * ny;
+          }
+        }
+      }
+    }
+
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
