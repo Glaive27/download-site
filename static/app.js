@@ -1493,13 +1493,13 @@ async function setupBetaFeedbackBar() {
 async function handleSubmitFeedback() {
     const input = document.getElementById('beta-feedback-input');
     const fileSelect = document.getElementById('beta-feedback-file');
-    const msg = document.getElementById('beta-feedback-msg');
+    const btn = document.getElementById('beta-feedback-submit');
     const content = input.value.trim();
     if (!content) {
-        msg.textContent = '反馈内容不能为空';
-        msg.classList.add('error');
+        showToast('反馈内容不能为空', true);
         return;
     }
+    if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
     try {
         const res = await authFetch('/api/feedback', {
             method: 'POST',
@@ -1514,11 +1514,11 @@ async function handleSubmitFeedback() {
             throw new Error(d.detail || '提交失败');
         }
         input.value = '';
-        msg.textContent = '反馈已提交，感谢你的支持！';
-        msg.classList.remove('error');
+        showToast('反馈已提交，感谢你的支持！');
     } catch (error) {
-        msg.textContent = error.message || '提交失败';
-        msg.classList.add('error');
+        showToast(error.message || '提交失败', true);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '提交'; }
     }
 }
 
