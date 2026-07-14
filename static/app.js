@@ -1133,6 +1133,7 @@ function renderFiles(files) {
                         <div class="file-info">
                             <span class="file-name">${escapeHtml(file.version)}</span>
                             <span class="file-size">${escapeHtml(file.size)}</span>
+                            ${file.is_beta ? '<span class="beta-tag">BETA</span>' : ''}
                             ${file.description ? `<span class="file-desc" title="${escapeHtml(file.description)}">${escapeHtml(file.description)}</span>` : ''}
                             ${isAdmin ? `
                                 <div class="file-desc-edit" style="display:none;">
@@ -2049,6 +2050,7 @@ async function handleRegister(event) {
     }
     const username = document.getElementById('register-username').value.trim();
     const password = document.getElementById('register-password').value;
+    const role = document.getElementById('register-role').value;
 
     try {
         const response = await fetch('/auth/register', {
@@ -2057,6 +2059,7 @@ async function handleRegister(event) {
             body: JSON.stringify({
                 username,
                 password,
+                role,
                 altcha: payload,
                 bot_score: BotDetector.compute(),
             }),
@@ -2114,6 +2117,7 @@ async function handleUploadFile(event) {
     const series = uploadSeriesSelect.value;
     const fileInput = document.getElementById('upload-file-input');
     const file = fileInput.files[0];
+    const isBeta = document.getElementById('upload-beta-input').checked;
 
     if (!series || !file) {
         showToast('请选择系列和文件', true);
@@ -2122,6 +2126,7 @@ async function handleUploadFile(event) {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('is_beta', isBeta ? 'true' : 'false');
 
     try {
         const response = await authFetch(`/api/series/${encodeURIComponent(series)}/files`, {

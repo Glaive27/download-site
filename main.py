@@ -15,15 +15,16 @@ import time
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 from urllib.parse import quote
 
 import logging
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import httpx
+from jose import JWTError, jwt as jose_jwt
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -37,7 +38,7 @@ from auth.schemas import BehaviorReport, BehaviorReverify, TrajectoryVerdict
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
 from auth.altcha import ALTCHA_HMAC_KEY, verify_altcha
-from auth.security import get_current_user, require_admin
+from auth.security import ALGORITHM, SECRET_KEY, get_current_user, require_admin
 from storage import delete_object, r2_enabled
 
 # 行为式人机认证：风险分达到该阈值即标记该用户需二次验证 / 限制操作
@@ -217,12 +218,25 @@ def refresh_user_location(user: User, request: Request, db: Session) -> None:
     db.commit()
 
 
+def _ensure_schema_migrations() -> None:
+    """在 create_all 之后补齐新增列（create_all 不会对已存在的表执行 ALTER）.
+
+    使用 IF NOT EXISTS 保证幂等，同时兼容 PostgreSQL 与 SQLite。
+    当前仅需为 file_records 增加 is_beta 列（Beta 文件标记）。
+    """
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS is_beta BOOLEAN NOT NULL DEFAULT 0"
+        ))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期事件：启动时初始化数据库与管理员账号，并启动不活跃账号清理任务."""
     from init_db import init_database
 
     Base.metadata.create_all(bind=engine)
+    _ensure_schema_migrations()
     init_database()
 
     # 启动后台任务：周期性扫描并清理长期不活跃且从未下载的账号
@@ -395,6 +409,23 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
+def _role_from_auth_header(authorization: Optional[str]) -> Optional[str]:
+    """从 Authorization 头中安全解析 JWT 的 role 字段.
+
+    - 无头 / 格式错误 / 签名无效 / 无 role：返回 None（视为普通访客，看不到 Beta）
+    - 不直接抛出 HTTP 异常，以保证 /files 对未登录用户保持开放
+    登录签发 token 时已在 payload 写入 role，故无需查询数据库。
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[len("Bearer "):].strip()
+    try:
+        payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    return payload.get("role")
+
+
 def _build_object_key(series: str, filename: str) -> str:
     """构建对象键（历史遗留，现仅用于占位）."""
     return f"{series}/{filename}"
@@ -493,10 +524,24 @@ async def health_check(db: Annotated[Session, Depends(get_db)]) -> JSONResponse:
 
 @app.get("/files")
 async def list_files(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
+    authorization: Annotated[Optional[str], Header()] = None,
 ) -> List[dict]:
-    """返回按系列分组的可下载文件列表."""
-    records = db.query(FileRecord).order_by(FileRecord.filename).all()
+    """返回按系列分组的可下载文件列表.
+
+    Beta 文件可见性规则：
+    - 管理员 / 开发者：可见全部文件（含 Beta）
+    - 普通用户 / 未登录：仅可见非 Beta 文件（Beta 文件完全不可见）
+    角色由请求头中的 JWT 解析得到（token 的 payload 已携带 role），无需额外查询数据库。
+    """
+    role = _role_from_auth_header(authorization)
+    can_see_beta = role in ("admin", "developer")
+
+    query = db.query(FileRecord)
+    if not can_see_beta:
+        query = query.filter(FileRecord.is_beta == False)  # noqa: E712
+    records = query.order_by(FileRecord.filename).all()
     series_names = {s.name for s in db.query(Series).all()}
 
     groups: dict[str, list[dict]] = {}
@@ -508,6 +553,7 @@ async def list_files(
             "version": display_name,
             "size": _format_size(record.size),
             "description": record.description or "",
+            "is_beta": bool(record.is_beta),
         })
 
     # 补充空系列
@@ -550,6 +596,7 @@ async def upload_file(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
+    is_beta: bool = Form(False),
 ) -> JSONResponse:
     """向指定系列上传文件，自动命名并将文件二进制存入数据库."""
     if not r2_enabled():
@@ -597,6 +644,7 @@ async def upload_file(
         object_key=object_key,
         file_data=content,
         file_mime=mime_type,
+        is_beta=bool(is_beta),
     )
     db.add(record)
     db.commit()
@@ -1142,6 +1190,7 @@ async def admin_stats(
             "name": display_name,
             "downloads": downloads,
             "ratio": round(ratio, 1),
+            "is_beta": bool(record.is_beta),
         })
     # 按下载量降序排列，便于阅读
     files.sort(key=lambda x: x["downloads"], reverse=True)

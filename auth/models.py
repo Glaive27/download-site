@@ -91,9 +91,10 @@ class FileRecord(Base):  # noqa: D101
     download_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     description = Column(String(512), nullable=True, default="")  # 文件简介
+    is_beta = Column(Boolean, default=False, nullable=False, index=True)  # 是否为 Beta 文件（仅开发者 / 管理员可见）
 
     def __repr__(self) -> str:  # noqa: D105
-        return f"<FileRecord(id={self.id}, series={self.series}, filename={self.filename})>"
+        return f"<FileRecord(id={self.id}, series={self.series}, filename={self.filename}, is_beta={self.is_beta})>"
 
 
 class UniqueVisitor(Base):  # noqa: D101

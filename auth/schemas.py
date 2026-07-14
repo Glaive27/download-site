@@ -36,6 +36,9 @@ class UserCreate(UserBase):  # noqa: D101
     # 客户端环境指纹风险分（0~1）：navigator.webdriver、无头浏览器、自动化框架特征等。
     # 由前端 BotDetector 计算，用于在登录/注册阶段对明显的自动化环境做硬拦截。
     bot_score: float = Field(0.0, ge=0.0, le=1.0, description="客户端环境自动化风险分")
+    # 注册身份：普通用户（user）或开发者（developer）。
+    # 不允许在注册时指定 admin —— 管理员只能由其他管理员创建 / 授权，避免越权。
+    role: Literal["user", "developer"] = "user"
 
     @field_validator("password")
     @classmethod

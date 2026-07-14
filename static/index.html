@@ -58,6 +58,10 @@
                         <input type="file" id="upload-file-input" required>
                         <button type="submit" class="btn btn-primary">上传</button>
                     </div>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="upload-beta-input">
+                        <span>是否为 Beta 文件（仅开发者 / 管理员可见）</span>
+                    </label>
                 </form>
             </div>
         </section>
@@ -105,6 +109,11 @@
                 <input type="text" id="register-username" name="username" required minlength="3" maxlength="32" placeholder="3-32 位字母/数字/下划线/中文">
                 <label for="register-password">密码</label>
                 <input type="password" id="register-password" name="password" required minlength="6" maxlength="128" placeholder="至少 6 位">
+                <label for="register-role">注册身份</label>
+                <select id="register-role" name="role">
+                    <option value="user">普通用户</option>
+                    <option value="developer">开发者</option>
+                </select>
                 <altcha-widget id="register-altcha" challenge="/api/altcha/challenge" name="altcha"></altcha-widget>
                 <button type="submit" class="btn btn-primary">注册</button>
             </form>

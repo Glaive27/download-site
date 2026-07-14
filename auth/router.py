@@ -63,7 +63,7 @@ def register(
     new_user = User(
         username=user_in.username,
         hashed_password=hashed_password,
-        role="user",
+        role=user_in.role,
     )
     db.add(new_user)
     db.commit()
