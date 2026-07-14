@@ -210,19 +210,30 @@
   };
   img.src = WALLPAPER_URL;
 
-  // ---------- 3 个反弹玻璃球 ----------
+  // ---------- 1 个跟随鼠标的玻璃球 ----------
   var orbs = [];
   function initOrbs() {
-    orbs = [
-      { r: 160, refract: 0.32, vx: 90, vy: 70, color: [0.55, 0.8, 1.0, 0.10] },
-      { r: 130, refract: 0.28, vx: -75, vy: 95, color: [0.7, 0.6, 1.0, 0.10] },
-      { r: 190, refract: 0.36, vx: 60, vy: -85, color: [0.6, 1.0, 0.85, 0.10] }
-    ];
     var W = canvas.width, H = canvas.height;
-    orbs[0].x = W * 0.30; orbs[0].y = H * 0.35;
-    orbs[1].x = W * 0.65; orbs[1].y = H * 0.55;
-    orbs[2].x = W * 0.50; orbs[2].y = H * 0.75;
+    orbs = [
+      { r: 170, refract: 0.34, x: W * 0.5, y: H * 0.5, color: [0.6, 0.85, 1.0, 0.10] }
+    ];
   }
+
+  // 鼠标目标位置 (设备像素坐标), 初始居中
+  var target = { x: 0, y: 0 };
+  var mouseInit = false;
+  window.addEventListener("mousemove", function (e) {
+    target.x = e.clientX * dpr;
+    target.y = e.clientY * dpr;
+    mouseInit = true;
+  });
+  window.addEventListener("touchmove", function (e) {
+    if (e.touches && e.touches.length) {
+      target.x = e.touches[0].clientX * dpr;
+      target.y = e.touches[0].clientY * dpr;
+      mouseInit = true;
+    }
+  }, { passive: true });
 
   // ---------- 尺寸 ----------
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -234,6 +245,7 @@
     canvas.style.height = window.innerHeight + "px";
     gl.viewport(0, 0, canvas.width, canvas.height);
     if (orbs.length === 0) initOrbs();
+    if (!mouseInit) { target.x = canvas.width * 0.5; target.y = canvas.height * 0.5; }
   }
   window.addEventListener("resize", resize);
   resize();
@@ -246,44 +258,13 @@
 
     var W = canvas.width, H = canvas.height;
 
-    for (var i = 0; i < orbs.length; i++) {
-      var o = orbs[i];
-      o.x += o.vx * dt;
-      o.y += o.vy * dt;
-      if (o.x < o.r) { o.x = o.r; o.vx = Math.abs(o.vx); }
-      else if (o.x > W - o.r) { o.x = W - o.r; o.vx = -Math.abs(o.vx); }
-      if (o.y < o.r) { o.y = o.r; o.vy = Math.abs(o.vy); }
-      else if (o.y > H - o.r) { o.y = H - o.r; o.vy = -Math.abs(o.vy); }
-    }
-
-    // 球体互相反弹 (二维弹性碰撞, 质量正比于半径平方)
-    var REST = 1.0; // 完全弹性
-    for (var a = 0; a < orbs.length; a++) {
-      for (var b = a + 1; b < orbs.length; b++) {
-        var A = orbs[a], B = orbs[b];
-        var dx = B.x - A.x, dy = B.y - A.y;
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        var minD = A.r + B.r;
-        if (dist > 0 && dist < minD) {
-          var nx = dx / dist, ny = dy / dist;
-          // 位置分离, 按质量反比推开, 避免粘连
-          var ma = A.r * A.r, mb = B.r * B.r, tot = ma + mb;
-          var overlap = minD - dist;
-          A.x -= nx * overlap * (mb / tot);
-          A.y -= ny * overlap * (mb / tot);
-          B.x += nx * overlap * (ma / tot);
-          B.y += ny * overlap * (ma / tot);
-          // 沿法向的相对速度 (A 相对 B)
-          var vn = (A.vx - B.vx) * nx + (A.vy - B.vy) * ny;
-          if (vn > 0) {
-            // 正在靠近, 施加冲量
-            var j = -(1 + REST) * vn / (1 / ma + 1 / mb);
-            A.vx += (j / ma) * nx; A.vy += (j / ma) * ny;
-            B.vx -= (j / mb) * nx; B.vy -= (j / mb) * ny;
-          }
-        }
-      }
-    }
+    // 平滑跟随鼠标 (指数插值, 带惯性感), 限制在屏幕内
+    var o = orbs[0];
+    var k = 1 - Math.pow(0.0025, dt); // 帧率无关的平滑系数
+    o.x += (target.x - o.x) * k;
+    o.y += (target.y - o.y) * k;
+    if (o.x < o.r) o.x = o.r; else if (o.x > W - o.r) o.x = W - o.r;
+    if (o.y < o.r) o.y = o.r; else if (o.y > H - o.r) o.y = H - o.r;
 
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
