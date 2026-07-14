@@ -1164,6 +1164,31 @@ async def admin_stats(
     db_quota_bytes = DATABASE_QUOTA_BYTES
     active_users = _count_active_sessions()
 
+    # ---- 扩展概览指标（按北京时间 UTC+8 计算「今日」） ----
+    _now_bj = datetime.now(timezone.utc) + timedelta(hours=8)
+    _today_start_bj = _now_bj.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = _today_start_bj - timedelta(hours=8)
+
+    today_downloads = (
+        db.query(DownloadLog)
+        .filter(DownloadLog.downloaded_at >= today_start_utc)
+        .count()
+    )
+    today_visitors = (
+        db.query(UniqueVisitor)
+        .filter(UniqueVisitor.first_seen >= today_start_utc)
+        .count()
+    )
+    never_downloaded_users = (
+        db.query(User)
+        .filter((User.download_count == 0) | (User.download_count.is_(None)))
+        .count()
+    )
+    total_file_size_bytes = sum((r.size or 0) for r in records)
+    avg_downloads_per_file = (
+        round(total_downloads / total_files_site, 1) if total_files_site else 0
+    )
+
     # ---- 用户下载历史（一次性聚合，供前端矩阵 / 事件流 / 下钻复用） ----
     user_downloads: dict[str, dict] = {}
     matrix: dict[str, dict[str, int]] = {}
@@ -1222,6 +1247,11 @@ async def admin_stats(
         "total_downloads": total_downloads,
         "total_visitors": total_visitors,
         "active_users": active_users,
+        "today_downloads": today_downloads,
+        "today_visitors": today_visitors,
+        "never_downloaded_users": never_downloaded_users,
+        "total_file_size_bytes": total_file_size_bytes,
+        "avg_downloads_per_file": avg_downloads_per_file,
         "users": users,
         "db_size_bytes": db_size_bytes,
         "db_quota_bytes": db_quota_bytes,

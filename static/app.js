@@ -1589,9 +1589,14 @@ function renderStats(data) {
         { k: '总下载量', v: dl, sub: dbDelta(dDl), spark: dbSparkline(sd, DB_COLORS.accent) },
         { k: '总访问人数', v: vis, sub: dbDelta(dVis), spark: dbSparkline(sv, DB_COLORS.green) },
         { k: '当前在线', v: data.active_users == null ? '—' : data.active_users },
+        { k: '今日下载', v: data.today_downloads == null ? '—' : data.today_downloads },
+        { k: '今日新增访客', v: data.today_visitors == null ? '—' : data.today_visitors },
         { k: '数据库占用', v: formatBytes(data.db_size_bytes || 0), sub: data.db_quota_bytes ? ('/ ' + formatBytes(data.db_quota_bytes)) : '' },
+        { k: '文件总大小', v: formatBytes(data.total_file_size_bytes || 0) },
         { k: '文件数', v: (data.files || []).length },
         { k: '注册用户', v: (data.users || []).length },
+        { k: '从未下载用户', v: data.never_downloaded_users == null ? '—' : data.never_downloaded_users },
+        { k: '单文件均下载', v: data.avg_downloads_per_file == null ? '—' : data.avg_downloads_per_file },
         { k: '高危用户', v: riskCount, red: riskCount > 0 },
     ];
     document.getElementById('db-cards').innerHTML = cards.map(c => `
