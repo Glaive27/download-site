@@ -38,7 +38,7 @@
     "varying vec2 texCoord;",
     "uniform sampler2D tex;",
     "void main() {",
-    "  gl_FragColor = texture2D(tex, vec2(texCoord.x, 1.0 - texCoord.y));",
+    "  gl_FragColor = texture2D(tex, texCoord);",
     "}"
   ].join("\n");
 
@@ -70,7 +70,7 @@
     "uniform float refr;",
     "uniform sampler2D img;",
     "uniform vec4 color;",
-    "vec4 sampleWall(vec2 tc) { return texture2D(img, vec2(tc.x, 1.0 - tc.y)); }",
+    "vec4 sampleWall(vec2 tc) { return texture2D(img, tc); }",
     "void main() {",
     "  float dist = distance(crCoord, vec2(0.0));",
     "  vec2 center = pos / resolution;",
@@ -158,7 +158,7 @@
   function uploadTexture(src) {
     try {
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
