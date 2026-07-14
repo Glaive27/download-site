@@ -215,7 +215,7 @@
   function initOrbs() {
     var W = canvas.width, H = canvas.height;
     orbs = [
-      { r: 170, refract: 0.34, x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, color: [0.6, 0.85, 1.0, 0.10] }
+      { r: 340, refract: 0.34, x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, color: [0.6, 0.85, 1.0, 0.10] }
     ];
   }
 
