@@ -258,22 +258,19 @@
 
     var W = canvas.width, H = canvas.height;
 
-    // 弹簧-阻尼物理: 鼠标目标产生吸引力, 球带速度滑行, 撞边反弹 (强惯性)
+    // 移植自 Glass.py 的惯性模型 (第 290-299 行): 速度积分, 顺滑拖尾, 明显惯性
+    // 速度 vx 趋向于 (目标-位置), 位置再以 vx 积分;
+    // 因速度平滑 dnum 慢于位置收敛 num, 鼠标停下后球仍滑行一段 => 惯性感
     var o = orbs[0];
-    var STIFF = 55;      // 弹簧刚度 (越大越跟手)
-    var DAMP = 0.0006;   // 阻尼基 (越小越"滑", 惯性越强)
-    var damp = Math.pow(DAMP, dt);
-    o.vx += (target.x - o.x) * STIFF * dt;
-    o.vy += (target.y - o.y) * STIFF * dt;
-    o.vx *= damp;
-    o.vy *= damp;
-    o.x += o.vx * dt;
-    o.y += o.vy * dt;
-    // 撞边反弹 (保留部分速度, 惯性感更强)
-    if (o.x < o.r) { o.x = o.r; o.vx = Math.abs(o.vx) * 0.5; }
-    else if (o.x > W - o.r) { o.x = W - o.r; o.vx = -Math.abs(o.vx) * 0.5; }
-    if (o.y < o.r) { o.y = o.r; o.vy = Math.abs(o.vy) * 0.5; }
-    else if (o.y > H - o.r) { o.y = H - o.r; o.vy = -Math.abs(o.vy) * 0.5; }
+    var num = Math.min(dt * 12, 1);   // 位置积分系数 (越大越跟手)
+    var dnum = Math.min(dt * 3, 1);   // 速度平滑系数 (越小惯性越强)
+    o.vx += (target.x - o.x - o.vx) * dnum;
+    o.vy += (target.y - o.y - o.vy) * dnum;
+    o.x += o.vx * num;
+    o.y += o.vy * num;
+    // 跟随鼠标, 触边贴边 (不反弹, 与 Glass.py 一致)
+    if (o.x < o.r) o.x = o.r; else if (o.x > W - o.r) o.x = W - o.r;
+    if (o.y < o.r) o.y = o.r; else if (o.y > H - o.r) o.y = H - o.r;
 
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
