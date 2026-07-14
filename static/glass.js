@@ -215,7 +215,7 @@
   function initOrbs() {
     var W = canvas.width, H = canvas.height;
     orbs = [
-      { r: 170, refract: 0.34, x: W * 0.5, y: H * 0.5, color: [0.6, 0.85, 1.0, 0.10] }
+      { r: 170, refract: 0.34, x: W * 0.5, y: H * 0.5, vx: 0, vy: 0, color: [0.6, 0.85, 1.0, 0.10] }
     ];
   }
 
@@ -258,13 +258,22 @@
 
     var W = canvas.width, H = canvas.height;
 
-    // 平滑跟随鼠标 (指数插值, 带惯性感), 限制在屏幕内
+    // 弹簧-阻尼物理: 鼠标目标产生吸引力, 球带速度滑行, 撞边反弹 (强惯性)
     var o = orbs[0];
-    var k = 1 - Math.pow(0.0025, dt); // 帧率无关的平滑系数
-    o.x += (target.x - o.x) * k;
-    o.y += (target.y - o.y) * k;
-    if (o.x < o.r) o.x = o.r; else if (o.x > W - o.r) o.x = W - o.r;
-    if (o.y < o.r) o.y = o.r; else if (o.y > H - o.r) o.y = H - o.r;
+    var STIFF = 55;      // 弹簧刚度 (越大越跟手)
+    var DAMP = 0.0006;   // 阻尼基 (越小越"滑", 惯性越强)
+    var damp = Math.pow(DAMP, dt);
+    o.vx += (target.x - o.x) * STIFF * dt;
+    o.vy += (target.y - o.y) * STIFF * dt;
+    o.vx *= damp;
+    o.vy *= damp;
+    o.x += o.vx * dt;
+    o.y += o.vy * dt;
+    // 撞边反弹 (保留部分速度, 惯性感更强)
+    if (o.x < o.r) { o.x = o.r; o.vx = Math.abs(o.vx) * 0.5; }
+    else if (o.x > W - o.r) { o.x = W - o.r; o.vx = -Math.abs(o.vx) * 0.5; }
+    if (o.y < o.r) { o.y = o.r; o.vy = Math.abs(o.vy) * 0.5; }
+    else if (o.y > H - o.r) { o.y = H - o.r; o.vy = -Math.abs(o.vy) * 0.5; }
 
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
