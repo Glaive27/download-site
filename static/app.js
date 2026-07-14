@@ -48,6 +48,7 @@ let activePingTimer = null;
 let onlinePollTimer = null;
 let sessionStatusTimer = null;   // 会话状态轮询定时器
 let statsRefreshTimer = null;   // 数据记录弹窗打开期间的自动刷新定时器
+let _dbLastData = null;          // 最近一次拉取的数据记录（供「导出数据」复用，避免重复请求）
 let serverWarm = false;  // 后端是否已预热（冷启动完成后为 true）
 
 // ALTCHA 人机验证（Proof-of-Work CAPTCHA）payload 暂存区
@@ -1014,6 +1015,7 @@ function requestTrajectoryReverify() {
         onlineBadge.addEventListener('click', openOnlineUsersModal);
     }
     document.getElementById('stats-back').addEventListener('click', showStatsContentView);
+    document.getElementById('stats-export-btn').addEventListener('click', exportStatsJSON);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
     startActivePing();
@@ -1794,6 +1796,42 @@ function renderStats(data) {
             </div>`;
         }).join('');
     }
+
+    // 缓存最新数据，供「导出数据」按钮复用
+    _dbLastData = data;
+}
+
+/**
+ * 导出数据记录为 JSON 文件（管理员专用）。
+ * 复用最近一次 renderStats 缓存的数据（_dbLastData），避免重复请求；
+ * 若缓存为空（弹窗尚未完成首次渲染）则提示稍候。
+ */
+function exportStatsJSON() {
+    if (!_dbLastData) {
+        alert('数据尚未加载完成，请稍候再试。');
+        return;
+    }
+    const payload = {
+        exported_at: new Date().toISOString(),
+        site: '文件下载中心',
+        data: _dbLastData,
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    const pad = (n) => String(n).padStart(2, '0');
+    const d = new Date();
+    const stamp =
+        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_` +
+        `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    a.href = url;
+    a.download = `数据记录_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 /**

@@ -1245,6 +1245,36 @@ body {
     padding-right: 0;
 }
 
+.stats-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.stats-export-btn {
+    flex-shrink: 0;
+    background-color: var(--accent);
+    color: #06121a;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    white-space: nowrap;
+}
+
+.stats-export-btn:hover {
+    background-color: #5be3f5;
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.4);
+}
+
+.stats-export-btn:active {
+    opacity: 0.85;
+}
+
 .stats-back-btn {
     flex-shrink: 0;
     background-color: transparent;
