@@ -1017,16 +1017,22 @@ async def altcha_challenge() -> JSONResponse:
 # 同源壁纸代理: 外链图床(applewalls)不发 CORS 头, WebGL 无法直接用其像素。
 # 这里由后端抓取并原样转发 (流式, 不落盘), 浏览器从同源加载即可绕过 CORS,
 # 液体玻璃着色器就能把真壁纸当作折射底图。带 Cache-Control 由浏览器缓存。
-WALLPAPER_SRC = "https://static.applewalls.com/macOS/macOS%2026%20Tahoe/compress/26-Tahoe-Dark-6K.webp"
+# 支持 variant=light|dark 切换昼夜壁纸, 默认 dark (兼容旧调用)。
+WALLPAPER_DARK_SRC = "https://static.applewalls.com/macOS/macOS%2026%20Tahoe/compress/26-Tahoe-Dark-6K.webp"
+WALLPAPER_LIGHT_SRC = "https://static.applewalls.com/macOS/macOS%2026%20Tahoe/compress/26-Tahoe-Light-6K.webp"
 
 
 @app.get("/api/wallpaper")
-async def wallpaper_proxy() -> Response:
-    """转发外部 macOS Tahoe 壁纸, 规避跨域限制 (不存储到服务器)."""
+async def wallpaper_proxy(variant: str = "dark") -> Response:
+    """转发外部 macOS Tahoe 壁纸, 规避跨域限制 (不存储到服务器).
+
+    variant=light  -> 白天壁纸; variant=dark (默认) -> 黑夜壁纸。
+    """
+    src = WALLPAPER_LIGHT_SRC if variant == "light" else WALLPAPER_DARK_SRC
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             r = await client.get(
-                WALLPAPER_SRC,
+                src,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",

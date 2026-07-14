@@ -1,8 +1,13 @@
 /*
  * Liquid Glass —— 移植自 Glass.py (moderngl 透镜折射着色器)
- * - 启动即用程序化深色渐变初始化纹理, 保证第一帧就渲染背景 + 玻璃球
- * - 壁纸加载成功 (CORS 干净) 则无缝替换为 Tahoe 壁纸; 失败保留渐变
- * - 3 个液体玻璃球, 各自带速度, 碰屏幕边缘反弹
+ * 动态昼夜背景: 根据访问者 IP 所在地的日出/日落 (wttr.in) 在
+ *   - 白天:  macOS Tahoe Light 壁纸
+ *   - 夜晚:  macOS Tahoe Dark 壁纸
+ * 之间平滑交叉淡入淡出 (crossfade)。玻璃球折射当前(混合后的)壁纸。
+ * - 启动即用程序化渐变初始化两张纹理, 保证第一帧就渲染
+ * - 两张壁纸经同源代理加载 (CORS 干净); 失败保留渐变兜底
+ * - 背景与玻璃折射均做 cover (等比裁剪铺满), 自适应各种屏幕
+ * - wttr.in 直连获取日出日落, 每 10 分钟刷新, 每 30 秒本地判定昼夜
  */
 (function () {
   "use strict";
@@ -20,7 +25,8 @@
     return;
   }
 
-  var WALLPAPER_URL = "/api/wallpaper";
+  var WALL_LIGHT = "/api/wallpaper?variant=light";
+  var WALL_DARK = "/api/wallpaper?variant=dark";
 
   // ---------- 着色器 ----------
   var BG_VERT = [
@@ -33,12 +39,26 @@
     "}"
   ].join("\n");
 
+  // 背景: 两张壁纸按 uNight 混合 (0=白天, 1=夜晚), cover 裁剪铺满
   var BG_FRAG = [
     "precision highp float;",
     "varying vec2 texCoord;",
-    "uniform sampler2D tex;",
+    "uniform sampler2D texLight;",
+    "uniform sampler2D texDark;",
+    "uniform float uNight;",
+    "uniform float uCanvasAspect;",
+    "uniform float uImgAspect;",
+    "vec2 coverUV(vec2 uv) {",
+    "  vec2 c = uv - 0.5;",
+    "  if (uCanvasAspect > uImgAspect) c.y *= uImgAspect / uCanvasAspect;",
+    "  else c.x *= uCanvasAspect / uImgAspect;",
+    "  return c + 0.5;",
+    "}",
     "void main() {",
-    "  gl_FragColor = texture2D(tex, texCoord);",
+    "  vec2 uv = coverUV(texCoord);",
+    "  vec4 a = texture2D(texLight, uv);",
+    "  vec4 b = texture2D(texDark, uv);",
+    "  gl_FragColor = mix(a, b, uNight);",
     "}"
   ].join("\n");
 
@@ -68,9 +88,22 @@
     "uniform vec2 resolution;",
     "uniform float diameter;",
     "uniform float refr;",
-    "uniform sampler2D img;",
+    "uniform sampler2D imgLight;",
+    "uniform sampler2D imgDark;",
+    "uniform float uNight;",
+    "uniform float uCanvasAspect;",
+    "uniform float uImgAspect;",
     "uniform vec4 color;",
-    "vec4 sampleWall(vec2 tc) { return texture2D(img, tc); }",
+    "vec2 coverUV(vec2 uv) {",
+    "  vec2 c = uv - 0.5;",
+    "  if (uCanvasAspect > uImgAspect) c.y *= uImgAspect / uCanvasAspect;",
+    "  else c.x *= uCanvasAspect / uImgAspect;",
+    "  return c + 0.5;",
+    "}",
+    "vec4 sampleWall(vec2 tc) {",
+    "  vec2 uv = coverUV(tc);",
+    "  return mix(texture2D(imgLight, uv), texture2D(imgDark, uv), uNight);",
+    "}",
     "void main() {",
     "  float dist = distance(crCoord, vec2(0.0));",
     "  vec2 center = pos / resolution;",
@@ -151,20 +184,20 @@
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-  // ---------- 纹理 ----------
-  var tex = gl.createTexture();
-  var texReady = false;
+  // ---------- 纹理 (白天 + 黑夜 各一张) ----------
+  var texLight = gl.createTexture();
+  var texDark = gl.createTexture();
+  var imgAspect = 16.0 / 9.0; // 壁纸宽高比, 加载后更新
 
-  function uploadTexture(src) {
+  function uploadTexture(texObj, src) {
     try {
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.bindTexture(gl.TEXTURE_2D, texObj);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      texReady = true;
       return true;
     } catch (e) {
       console.warn("[glass] 纹理上传失败:", e);
@@ -172,43 +205,87 @@
     }
   }
 
-  // 程序化深色渐变 (Tahoe 风格兜底, 启动即用)
+  // 程序化中性渐变 (兜底, 启动即用, 白天黑夜都不过分突兀)
   function makeFallbackTexture() {
     var c = document.createElement("canvas");
     c.width = 512; c.height = 512;
     var g = c.getContext("2d");
     var lin = g.createLinearGradient(0, 0, 512, 512);
-    lin.addColorStop(0.0, "#0a1230");
-    lin.addColorStop(0.45, "#0e2a3a");
-    lin.addColorStop(0.75, "#241433");
-    lin.addColorStop(1.0, "#0a0f24");
+    lin.addColorStop(0.0, "#243049");
+    lin.addColorStop(0.5, "#2a3b54");
+    lin.addColorStop(1.0, "#1a2236");
     g.fillStyle = lin;
     g.fillRect(0, 0, 512, 512);
-    var rg = g.createRadialGradient(150, 140, 10, 150, 140, 380);
-    rg.addColorStop(0, "rgba(90,170,230,0.40)");
-    rg.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = rg;
-    g.fillRect(0, 0, 512, 512);
-    uploadTexture(c);
+    return c;
   }
+  var fb = makeFallbackTexture();
+  uploadTexture(texLight, fb);
+  uploadTexture(texDark, fb);
 
-  // 启动立即有背景, 保证第一帧就渲染
-  makeFallbackTexture();
+  // 异步加载真实壁纸 (CORS 干净才替换), 并取宽高比
+  function loadWall(url, texObj) {
+    var img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = function () {
+      if (uploadTexture(texObj, img)) {
+        if (img.naturalWidth && img.naturalHeight) {
+          imgAspect = img.naturalWidth / img.naturalHeight;
+        }
+        console.info("[glass] 壁纸纹理已加载:", url);
+      } else {
+        console.warn("[glass] 壁纸被 CORS 限制, 保留渐变兜底");
+      }
+    };
+    img.onerror = function () {
+      console.warn("[glass] 壁纸加载失败, 保留渐变兜底:", url);
+    };
+    img.src = url;
+  }
+  loadWall(WALL_LIGHT, texLight);
+  loadWall(WALL_DARK, texDark);
 
-  // 异步尝试加载真实壁纸, CORS 干净才替换
-  var img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = function () {
-    if (uploadTexture(img)) {
-      console.info("[glass] 已加载壁纸纹理");
-    } else {
-      console.warn("[glass] 壁纸被 CORS 限制, 保留渐变兜底");
-    }
-  };
-  img.onerror = function () {
-    console.warn("[glass] 壁纸加载失败, 保留渐变兜底");
-  };
-  img.src = WALLPAPER_URL;
+  // ---------- 昼夜判定 (wttr.in 日出/日落) ----------
+  var nightTarget = -1;   // -1 表示尚未获取; 0=白天, 1=夜晚
+  var nightFactor = 0;    // 实际渲染值 (向 nightTarget 平滑过渡)
+  var firstSun = true;    // 首次获取时直接吸附, 不做过渡
+  var sun = { sr: null, ss: null, ok: false };
+  var SUN_FETCH_MS = 10 * 60 * 1000; // 每 10 分钟重新获取日出日落
+  var SUN_TICK_MS = 30 * 1000;       // 每 30 秒本地判定一次昼夜
+
+  function toMin(hms) {
+    var p = String(hms).split(":").map(Number);
+    return (p[0] || 0) * 60 + (p[1] || 0) + (p[2] || 0) / 60;
+  }
+  function evalDay() {
+    if (!sun.ok) return;
+    var now = new Date();
+    var cur = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+    var isDay = cur >= sun.sr && cur < sun.ss;
+    nightTarget = isDay ? 0 : 1;
+  }
+  function fetchSun() {
+    fetch("https://wttr.in/?format=%S|%s")
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var parts = t.trim().split("|");
+        if (parts.length !== 2) throw new Error("格式异常: " + t);
+        sun.sr = toMin(parts[0]);
+        sun.ss = toMin(parts[1]);
+        sun.ok = true;
+        evalDay();
+        if (firstSun) {
+          nightFactor = nightTarget; // 首次吸附, 避免加载闪一下
+          firstSun = false;
+        }
+        console.info("[glass] 日出/日落:", parts[0], parts[1], "夜晚=", nightTarget === 1);
+      })
+      .catch(function (e) {
+        console.warn("[glass] 获取日出日落失败, 沿用上次结果:", e);
+      });
+  }
+  fetchSun();
+  setInterval(fetchSun, SUN_FETCH_MS);
+  setInterval(evalDay, SUN_TICK_MS);
 
   // ---------- 1 个跟随鼠标的玻璃球 ----------
   var orbs = [];
@@ -252,15 +329,25 @@
 
   // ---------- 渲染循环 ----------
   var last = performance.now();
+  var TRANSITION_SECONDS = 2.5; // 昼夜切换交叉淡入时长
+
   function frame(now) {
     var dt = Math.min((now - last) / 1000, 0.05);
     last = now;
 
     var W = canvas.width, H = canvas.height;
 
+    // 昼夜过渡: nightFactor 以固定速率向 nightTarget 逼近 (平滑 crossfade)
+    if (nightTarget >= 0) {
+      var step = dt / TRANSITION_SECONDS;
+      if (nightFactor < nightTarget) nightFactor = Math.min(nightFactor + step, nightTarget);
+      else if (nightFactor > nightTarget) nightFactor = Math.max(nightFactor - step, nightTarget);
+    }
+    // smoothstep 缓动, 让过渡更自然
+    var eased = nightFactor * nightFactor * (3.0 - 2.0 * nightFactor);
+    var canvasAspect = W / H;
+
     // 移植自 Glass.py 的惯性模型 (第 290-299 行): 速度积分, 顺滑拖尾, 明显惯性
-    // 速度 vx 趋向于 (目标-位置), 位置再以 vx 积分;
-    // 因速度平滑 dnum 慢于位置收敛 num, 鼠标停下后球仍滑行一段 => 惯性感
     var o = orbs[0];
     var num = Math.min(dt * 12, 1);   // 位置积分系数 (越大越跟手)
     var dnum = Math.min(dt * 3, 1);   // 速度平滑系数 (越小惯性越强)
@@ -275,24 +362,32 @@
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    if (!texReady) {
-      // 极端兜底: 纹理仍不可用, 用纯色背景至少让球可见
-      gl.clearColor(0.02, 0.05, 0.12, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-    } else {
-      gl.useProgram(bgProg);
-      bindAttribs(bgProg);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform1i(gl.getUniformLocation(bgProg, "tex"), 0);
-      gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-    }
+    // 背景: 两张壁纸混合
+    gl.useProgram(bgProg);
+    bindAttribs(bgProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texLight);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texDark);
+    gl.uniform1i(gl.getUniformLocation(bgProg, "texLight"), 0);
+    gl.uniform1i(gl.getUniformLocation(bgProg, "texDark"), 1);
+    gl.uniform1f(gl.getUniformLocation(bgProg, "uNight"), eased);
+    gl.uniform1f(gl.getUniformLocation(bgProg, "uCanvasAspect"), canvasAspect);
+    gl.uniform1f(gl.getUniformLocation(bgProg, "uImgAspect"), imgAspect);
+    gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 
+    // 玻璃球: 折射混合后的壁纸
     gl.useProgram(glassProg);
     bindAttribs(glassProg);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.uniform1i(gl.getUniformLocation(glassProg, "img"), 0);
+    gl.bindTexture(gl.TEXTURE_2D, texLight);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texDark);
+    gl.uniform1i(gl.getUniformLocation(glassProg, "imgLight"), 0);
+    gl.uniform1i(gl.getUniformLocation(glassProg, "imgDark"), 1);
+    gl.uniform1f(gl.getUniformLocation(glassProg, "uNight"), eased);
+    gl.uniform1f(gl.getUniformLocation(glassProg, "uCanvasAspect"), canvasAspect);
+    gl.uniform1f(gl.getUniformLocation(glassProg, "uImgAspect"), imgAspect);
     gl.uniform2f(gl.getUniformLocation(glassProg, "resolution"), W, H);
     for (var j = 0; j < orbs.length; j++) {
       var b = orbs[j];
@@ -318,5 +413,5 @@
     if (!document.hidden) last = performance.now();
   });
 
-  console.info("[glass] 初始化完成, texReady=", texReady);
+  console.info("[glass] 初始化完成 (昼夜动态壁纸)");
 })();
