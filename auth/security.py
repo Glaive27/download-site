@@ -91,6 +91,23 @@ def get_current_active_user(
     return current_user
 
 
+def require_developer(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> User:
+    """开发者（含管理员）权限依赖，用于 Beta 反馈提交等场景.
+
+    - developer：可提交 Beta 反馈
+    - admin：作为更高权限，同样允许提交
+    - 普通 user：返回 403
+    """
+    if current_user.role not in ("admin", "developer"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="权限不足，仅 Beta 开发者可提交反馈",
+        )
+    return current_user
+
+
 def require_admin(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> User:

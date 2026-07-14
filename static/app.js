@@ -1042,6 +1042,14 @@ function requestTrajectoryReverify() {
     document.getElementById('stats-export-btn').addEventListener('click', exportStatsJSON);
     document.getElementById('stats-history-sort').addEventListener('click', toggleHistorySort);
 
+    // 底部 Beta 反馈条：提交按钮 + 回车提交
+    const feedbackSubmit = document.getElementById('beta-feedback-submit');
+    if (feedbackSubmit) feedbackSubmit.addEventListener('click', handleSubmitFeedback);
+    const feedbackInput = document.getElementById('beta-feedback-input');
+    if (feedbackInput) feedbackInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); handleSubmitFeedback(); }
+    });
+
     startActivePing();
 
     modalTabs.forEach(tab => {
@@ -1423,6 +1431,94 @@ function updateUploadSeriesSelect(files) {
 
     if (currentValue) {
         uploadSeriesSelect.value = currentValue;
+    }
+}
+
+/**
+ * 将 /files 返回的分组数据铺平为「文件下拉选项」列表（series / filename / 显示名）。
+ * 仅开发者可见的反馈条使用此列表填充「关联文件」选择框。
+ * @param {Array} files /files 接口返回的分组数组
+ * @returns {Array<{value:string, label:string}>}
+ */
+function flattenFileOptions(files) {
+    const opts = [];
+    if (!Array.isArray(files)) return opts;
+    files.forEach(group => {
+        (group.versions || []).forEach(v => {
+            const label = group.series
+                ? `${group.series} / ${v.version}`
+                : v.version;
+            opts.push({ value: v.name, label });
+        });
+    });
+    return opts;
+}
+
+/** 当前登录用户是否为 Beta 开发者（developer 角色） */
+function currentUserIsDeveloper() {
+    const userJson = localStorage.getItem(USER_KEY);
+    if (!userJson) return false;
+    try {
+        const user = JSON.parse(userJson);
+        return user.role === 'developer';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * 显示并填充底部 Beta 反馈条（仅开发者角色可见）。
+ * 从 /files 拉取文件列表填充「关联文件」下拉框；普通用户/游客/管理员均不显示。
+ */
+async function setupBetaFeedbackBar() {
+    const bar = document.getElementById('beta-feedback-bar');
+    if (!bar) return;
+    if (!currentUserIsDeveloper()) {
+        bar.classList.add('hidden');
+        return;
+    }
+    bar.classList.remove('hidden');
+    try {
+        const res = await fetch('/files', { cache: 'no-store' });
+        if (!res.ok) return;
+        const files = await res.json();
+        const select = document.getElementById('beta-feedback-file');
+        const opts = flattenFileOptions(files);
+        select.innerHTML = '<option value="">不关联具体文件</option>' +
+            opts.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+    } catch { /* 静默：下拉为空也不影响提交 */ }
+}
+
+/** 提交 Beta 反馈 */
+async function handleSubmitFeedback() {
+    const input = document.getElementById('beta-feedback-input');
+    const fileSelect = document.getElementById('beta-feedback-file');
+    const msg = document.getElementById('beta-feedback-msg');
+    const content = input.value.trim();
+    if (!content) {
+        msg.textContent = '反馈内容不能为空';
+        msg.classList.add('error');
+        return;
+    }
+    try {
+        const res = await authFetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                file_name: fileSelect.value || '',
+                content,
+            }),
+        });
+        if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            throw new Error(d.detail || '提交失败');
+        }
+        input.value = '';
+        msg.textContent = '反馈已提交，感谢你的支持！';
+        msg.classList.remove('error');
+    } catch (error) {
+        msg.textContent = error.message || '提交失败';
+        msg.classList.add('error');
     }
 }
 
@@ -1818,6 +1914,26 @@ function renderStats(data) {
                 ${e.series ? `<span class="series-tag">[${escapeHtml(e.series)}]</span>` : ''}
                 ${isNew ? '<span class="new">NEW</span>' : ''}
                 <span class="t">${dbTime(e.downloaded_at)}</span>
+            </div>`;
+        }).join('');
+    }
+
+    // ---- Beta 反馈 ----
+    const fbs = data.feedbacks || [];
+    if (!fbs.length) {
+        document.getElementById('db-feedback-body').innerHTML = '<div class="db-empty">暂无 Beta 反馈</div>';
+    } else {
+        document.getElementById('db-feedback-body').innerHTML = fbs.map(f => {
+            const fileTag = f.file_name
+                ? `<span class="feedback-file">关联文件：${escapeHtml(f.file_name)}</span>`
+                : '';
+            return `<div class="feedback-item">
+                <div class="feedback-meta">
+                    <span class="feedback-user">${escapeHtml(f.username)}</span>
+                    ${fileTag}
+                    <span>${dbTime(f.created_at)}</span>
+                </div>
+                <div class="feedback-content">${escapeHtml(f.content)}</div>
             </div>`;
         }).join('');
     }
@@ -2301,10 +2417,11 @@ function updateAuthUI() {
     if (userJson) {
         const user = JSON.parse(userJson);
         const isAdmin = user.role === 'admin';
+        const roleLabel = isAdmin ? '管理员' : (user.role === 'developer' ? '开发者' : '用户');
         headerAuth.innerHTML = `
             <div class="user-info">
                 <span class="user-name">${escapeHtml(user.username)}</span>
-                <span class="user-role ${escapeHtml(user.role)}">${escapeHtml(isAdmin ? '管理员' : '用户')}</span>
+                <span class="user-role ${escapeHtml(user.role)}">${escapeHtml(roleLabel)}</span>
             </div>
             ${isAdmin ? '<button class="btn btn-secondary" id="stats-btn">数据记录</button>' : ''}
             <button class="btn btn-primary" id="logout-btn">退出</button>
@@ -2333,6 +2450,9 @@ function updateAuthUI() {
         MouseTrajectoryVerifier.endAuto();
         stopSessionStatusPoll();
     }
+
+    // 底部 Beta 反馈条：根据开发者角色显示 / 隐藏并填充文件下拉
+    setupBetaFeedbackBar();
 }
 
 /**

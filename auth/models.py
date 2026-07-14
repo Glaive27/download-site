@@ -163,3 +163,28 @@ class SiteConfig(Base):  # noqa: D101
 
     def __repr__(self) -> str:  # noqa: D105
         return f"<SiteConfig(key={self.key})>"
+
+
+class Feedback(Base):  # noqa: D101
+    """Beta 用户反馈表.
+
+    仅开发者（developer 角色）可在网站底部提交，管理员可在「数据记录」查看。
+    用于收集 Beta 版本的 Bug 与改进建议。
+
+    字段说明：
+    - username:   提交者用户名（冗余存储，便于直接展示，免联表）
+    - file_name:  关联的文件名（可选，用户在下拉框中选定；空字符串表示不关联具体文件）
+    - content:    反馈内容（Bug / 建议文本）
+    - created_at: 提交时间（UTC）
+    """
+
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(64), nullable=False, index=True)
+    file_name = Column(String(255), nullable=False, default="")
+    content = Column(String(2000), nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:  # noqa: D105
+        return f"<Feedback(id={self.id}, username={self.username}, file_name={self.file_name})>"

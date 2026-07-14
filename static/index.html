@@ -265,6 +265,7 @@
                         <div class="db-tab" data-tab="risk">风险用户</div>
                         <div class="db-tab" data-tab="matrix">用户×文件</div>
                         <div class="db-tab" data-tab="events">实时事件</div>
+                        <div class="db-tab" data-tab="feedback">Beta 反馈</div>
                     </div>
                     <div class="db-pane active" id="db-pane-files"><div id="db-files-body" class="db-empty">加载中…</div></div>
                     <div class="db-pane" id="db-pane-series"><div id="db-series-body" class="db-empty">加载中…</div></div>
@@ -285,6 +286,7 @@
                     </div>
                     <div class="db-pane" id="db-pane-matrix"><div id="db-matrix-body" class="db-empty">加载中…</div></div>
                     <div class="db-pane" id="db-pane-events"><div id="db-events-body" class="db-evlist db-empty">加载中…</div></div>
+                    <div class="db-pane" id="db-pane-feedback"><div id="db-feedback-body" class="db-empty">加载中…</div></div>
                 </div>
             </div>
 
@@ -316,6 +318,19 @@
             </div>
         </div>
     </div>
+
+    <!-- 底部 Beta 反馈条：仅开发者（Beta 用户）可见 -->
+    <footer class="beta-feedback-bar hidden" id="beta-feedback-bar">
+        <div class="beta-feedback-inner">
+            <span class="beta-feedback-tag">Beta 反馈</span>
+            <select class="beta-feedback-file" id="beta-feedback-file">
+                <option value="">不关联具体文件</option>
+            </select>
+            <input type="text" class="beta-feedback-input" id="beta-feedback-input" maxlength="2000" placeholder="提交 Bug 或改进建议，帮助改进项目…">
+            <button class="btn btn-primary beta-feedback-submit" id="beta-feedback-submit" type="button">提交</button>
+        </div>
+        <div class="beta-feedback-msg" id="beta-feedback-msg"></div>
+    </footer>
 
     <script src="/static/glass.js"></script>
     <script src="/static/app.js"></script>

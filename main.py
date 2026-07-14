@@ -33,12 +33,12 @@ from sqlalchemy import text
 load_dotenv()
 
 from auth.database import Base, SessionLocal, engine, get_db
-from auth.models import DownloadLog, FileRecord, Series, SiteConfig, UniqueVisitor, User, _utcnow
+from auth.models import DownloadLog, Feedback, FileRecord, Series, SiteConfig, UniqueVisitor, User, _utcnow
 from auth.schemas import BehaviorReport, BehaviorReverify, TrajectoryVerdict
 from altcha import create_challenge_v1
 from auth.router import router as auth_router
 from auth.altcha import ALTCHA_HMAC_KEY, verify_altcha
-from auth.security import ALGORITHM, SECRET_KEY, get_current_user, require_admin
+from auth.security import ALGORITHM, SECRET_KEY, get_current_user, require_admin, require_developer
 from storage import delete_object, r2_enabled
 
 # 行为式人机认证：风险分达到该阈值即标记该用户需二次验证 / 限制操作
@@ -1291,6 +1291,18 @@ async def admin_stats(
     events.sort(key=lambda e: e["downloaded_at"], reverse=True)
     recent_events = events[:100]
 
+    # ---- Beta 反馈（管理员可见） ----
+    feedbacks = [
+        {
+            "id": f.id,
+            "username": f.username,
+            "file_name": f.file_name or "",
+            "content": f.content,
+            "created_at": f.created_at.isoformat() if f.created_at else None,
+        }
+        for f in db.query(Feedback).order_by(Feedback.created_at.desc()).all()
+    ]
+
     return JSONResponse({
         "files": files,
         "total_downloads": total_downloads,
@@ -1308,7 +1320,39 @@ async def admin_stats(
         "user_downloads": user_downloads,
         "matrix": matrix,
         "recent_events": recent_events,
+        "feedbacks": feedbacks,
     })
+
+
+class FeedbackRequest(BaseModel):  # noqa: D101
+    """Beta 反馈提交请求体."""
+
+    file_name: str = ""
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
+@app.post("/api/feedback")
+async def submit_feedback(
+    current_user: Annotated[User, Depends(require_developer)],
+    db: Annotated[Session, Depends(get_db)],
+    req: FeedbackRequest,
+) -> JSONResponse:
+    """Beta 开发者提交反馈（Bug / 建议）.
+
+    仅 developer / admin 角色可调用（require_developer 依赖已拦截普通用户）。
+    反馈内容写入 ``feedbacks`` 表，管理员可在「数据记录」中查看。
+    """
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="反馈内容不能为空")
+    feedback = Feedback(
+        username=current_user.username,
+        file_name=(req.file_name or "").strip()[:255],
+        content=content,
+    )
+    db.add(feedback)
+    db.commit()
+    return JSONResponse({"ok": True, "message": "反馈已提交，感谢你的支持！"})
 
 
 @app.post("/api/admin/analyze-risks")
